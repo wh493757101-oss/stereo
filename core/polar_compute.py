@@ -9,10 +9,35 @@ The warp depends on a disparity map: right pixel at column (x - d) maps to
 left pixel at column x on the same row y.
 """
 
+import dataclasses
+
 import cv2
 import numpy as np
 
 from core.stereo_matching import StereoMatcher, StereoMatcherConfig, to_gray_u8
+
+POLAR_EPSILON = 1e-6
+
+
+@dataclasses.dataclass(frozen=True)
+class PolarFeatureResult:
+    """Structured polarization differential result with explicit validity.
+
+    ``signed_q``/``abs_q`` are 0 wherever ``valid_mask`` is False, so an
+    invalid pixel is distinguishable from a true zero-polarization pixel
+    (which has ``valid_mask`` True and ``abs_q`` 0).
+
+    The three ratio fields are computed over ``object_mask`` pixels when a
+    mask is supplied, otherwise over the whole image.
+    """
+
+    signed_q: np.ndarray  # float32 (H, W), in [-1, 1], 0 where invalid
+    abs_q: np.ndarray  # float32 (H, W), in [0, 1], 0 where invalid
+    valid_mask: np.ndarray  # bool (H, W)
+    in_bounds_mask: np.ndarray  # bool (H, W)
+    valid_ratio: float
+    in_bounds_ratio: float
+    brightness_valid_ratio: float
 
 
 def warp_with_disparity(
@@ -87,6 +112,132 @@ def compute_polar_feature(
         polar = polar * (mask > 0).astype(np.float32)
 
     return np.clip(polar, 0.0, 1.0)
+
+
+def compute_polar_features(
+    left: np.ndarray,
+    right: np.ndarray,
+    disparity: np.ndarray,
+    object_mask: np.ndarray | None = None,
+    disparity_valid: np.ndarray | None = None,
+    right_gain: float = 1.0,
+    min_intensity_sum: float = 10.0,
+    epsilon: float = POLAR_EPSILON,
+) -> PolarFeatureResult:
+    """Compute the signed polarization differential with explicit validity.
+
+    signed_q = (L - gain * warp(R)) / (L + gain * warp(R) + epsilon)
+    abs_q    = |signed_q|
+
+    A pixel is valid only when ALL of the following hold:
+    - inside ``object_mask`` (when a mask is supplied);
+    - the disparity is finite and strictly positive;
+    - the right-view sample position (x - d) lies inside the image;
+    - the pixel passes ``disparity_valid`` (e.g. the stereo matcher's
+      left-right-consistency valid map), when supplied;
+    - L + gain*warp(R) >= ``min_intensity_sum`` (bright enough to measure).
+
+    Invalid pixels get signed_q == 0 and abs_q == 0; consumers must check
+    ``valid_mask`` to distinguish them from genuine zero polarization.
+
+    Args:
+        left: left image (0-degree polarization channel).
+        right: right image (90-degree polarization channel).
+        disparity: per-pixel disparity, float32, same H/W as the images.
+        object_mask: optional uint8/bool mask restricting the measurement.
+        disparity_valid: optional per-pixel validity mask for the disparity
+            (e.g. ``StereoMatchResult.valid``).
+        right_gain: multiplicative gain applied to the warped right image
+            before differencing (compensates camera exposure differences).
+        min_intensity_sum: minimum L + gain*warp(R) for a usable ratio.
+        epsilon: denominator guard (irrelevant above min_intensity_sum).
+
+    Returns:
+        PolarFeatureResult with maps at the input resolution.
+    """
+    left_f = to_gray_u8(left).astype(np.float32)
+    right_f = to_gray_u8(right).astype(np.float32)
+    if left_f.shape != right_f.shape:
+        raise ValueError(
+            f"left/right shape mismatch: {left_f.shape} vs {right_f.shape}"
+        )
+    disp = np.asarray(disparity, dtype=np.float32)
+    if disp.shape != left_f.shape:
+        raise ValueError(
+            f"disparity shape {disp.shape} != image shape {left_f.shape}"
+        )
+
+    h, w = left_f.shape
+    yy, xx = np.meshgrid(
+        np.arange(h, dtype=np.float32),
+        np.arange(w, dtype=np.float32),
+        indexing="ij",
+    )
+    map_x = xx - disp
+    # BORDER_CONSTANT yields 0 outside the image; those samples are excluded
+    # by in_bounds below instead of saturating the ratio towards 1.
+    warped_right = cv2.remap(
+        right_f,
+        map_x,
+        yy,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+    if right_gain != 1.0:
+        warped_right = warped_right * np.float32(right_gain)
+
+    denom = left_f + warped_right
+    brightness_valid = denom >= float(min_intensity_sum)
+    in_bounds = (map_x >= 0.0) & (map_x <= w - 1)
+    disparity_ok = np.isfinite(disp) & (disp > 0)
+    consistency = (
+        np.ones((h, w), dtype=bool)
+        if disparity_valid is None
+        else np.asarray(disparity_valid) > 0
+    )
+    if consistency.shape != (h, w):
+        raise ValueError(
+            f"disparity_valid shape {consistency.shape} != image shape {(h, w)}"
+        )
+    target = (
+        np.ones((h, w), dtype=bool)
+        if object_mask is None
+        else np.asarray(object_mask) > 0
+    )
+    if target.shape != (h, w):
+        raise ValueError(
+            f"object_mask shape {target.shape} != image shape {(h, w)}"
+        )
+
+    valid = target & disparity_ok & in_bounds & consistency & brightness_valid
+
+    signed_q = np.zeros((h, w), dtype=np.float32)
+    np.divide(
+        left_f - warped_right,
+        denom + np.float32(epsilon),
+        out=signed_q,
+        where=valid,
+    )
+    signed_q = np.clip(signed_q, -1.0, 1.0).astype(np.float32)
+    abs_q = np.abs(signed_q)
+
+    total = int(target.sum())
+    if total == 0:
+        valid_ratio = in_bounds_ratio = brightness_valid_ratio = 0.0
+    else:
+        valid_ratio = float((valid & target).sum()) / total
+        in_bounds_ratio = float((in_bounds & target).sum()) / total
+        brightness_valid_ratio = float((brightness_valid & target).sum()) / total
+
+    return PolarFeatureResult(
+        signed_q=signed_q,
+        abs_q=abs_q,
+        valid_mask=valid,
+        in_bounds_mask=in_bounds,
+        valid_ratio=valid_ratio,
+        in_bounds_ratio=in_bounds_ratio,
+        brightness_valid_ratio=brightness_valid_ratio,
+    )
 
 
 def fill_disparity_in_mask(
