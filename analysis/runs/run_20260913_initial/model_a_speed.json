@@ -1,0 +1,11 @@
+{
+  "mean_ms": 9.39,
+  "std_ms": 0.45,
+  "min_ms": 8.58,
+  "max_ms": 11.25,
+  "p50_ms": 9.32,
+  "p95_ms": 10.17,
+  "fps": 106.5,
+  "mode": "model",
+  "model": "runs\\train\\model_a\\weights\\best.pt"
+}

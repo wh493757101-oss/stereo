@@ -1,0 +1,19 @@
+{
+  "mean_ms": 165.96,
+  "std_ms": 5.91,
+  "min_ms": 155.56,
+  "max_ms": 176.4,
+  "p50_ms": 166.27,
+  "p95_ms": 174.37,
+  "fps": 6.0,
+  "mode": "pipeline",
+  "already_rectified": true,
+  "warmup": 5,
+  "repetitions": 30,
+  "last_frame_instances": 2,
+  "last_frame_valid_depths": 2,
+  "config": "configs/default.yaml",
+  "left_image": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\left\\000.png",
+  "right_image": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\right\\000.png",
+  "device": "0"
+}

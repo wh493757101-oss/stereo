@@ -1,0 +1,19 @@
+{
+  "dataset": "datasets/bd_image",
+  "calibration": "datasets/bd_image/stereo_calib.npz",
+  "rotation_convention": "matlab",
+  "rectification_rule": "R_cv = R_matlab.T",
+  "checkerboard_inner_corners": [11, 8],
+  "attempted_pairs": 40,
+  "detected_pairs": 34,
+  "undetected_stems": ["002", "006", "007", "010", "026", "029"],
+  "median_of_pair_median_abs_y_px": 0.084869384765625,
+  "max_pair_median_abs_y_px": 0.151458740234375,
+  "median_of_pair_p95_abs_y_px": 0.24110183864831924,
+  "max_pair_p95_abs_y_px": 0.30314940214157104,
+  "thresholds": {
+    "max_pair_median_abs_y_px": 1.0,
+    "max_pair_p95_abs_y_px": 1.0
+  },
+  "decision": "pass"
+}

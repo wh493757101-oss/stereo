@@ -1,0 +1,1307 @@
+{
+  "samples_per_group": 3,
+  "sift_max_features": 4000,
+  "ratio_test_threshold": 0.75,
+  "outlier_filter": {
+    "method": "median_mad_on_dy",
+    "sigma_multiplier": 3.0,
+    "floor_px": 2.0,
+    "offset_subtracted": false
+  },
+  "thresholds": {
+    "min_matches": 15,
+    "max_median_y": 1.0,
+    "max_p95_y": 3.0
+  },
+  "groups": [
+    {
+      "group": "Single\\Metal submarine\\0 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Metal submarine\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 88,
+          "inlier_count": 78,
+          "median_abs_y": 0.420623779296875,
+          "p95_abs_y": 1.5733856201171872,
+          "median_disparity_x": 403.56158447265625
+        },
+        {
+          "group": "Single\\Metal submarine\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 122,
+          "inlier_count": 112,
+          "median_abs_y": 0.6517333984375,
+          "p95_abs_y": 1.9788818359375,
+          "median_disparity_x": 447.7346420288086
+        },
+        {
+          "group": "Single\\Metal submarine\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 139,
+          "inlier_count": 127,
+          "median_abs_y": 0.919677734375,
+          "p95_abs_y": 2.3691345214843746,
+          "median_disparity_x": 499.25946044921875
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.6517333984375,
+        "max_median_abs_y": 0.919677734375,
+        "max_p95_abs_y": 2.3691345214843746,
+        "median_disparity_x": 447.7346420288086
+      }
+    },
+    {
+      "group": "Single\\Metal submarine\\10 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Metal submarine\\10 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\10 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\10 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 136,
+          "inlier_count": 121,
+          "median_abs_y": 0.3853759765625,
+          "p95_abs_y": 1.62396240234375,
+          "median_disparity_x": 449.1197509765625
+        },
+        {
+          "group": "Single\\Metal submarine\\10 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\10 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\10 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 24,
+          "inlier_count": 20,
+          "median_abs_y": 0.347412109375,
+          "p95_abs_y": 1.384820556640625,
+          "median_disparity_x": 499.62791442871094
+        },
+        {
+          "group": "Single\\Metal submarine\\10 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\10 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\10 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 12,
+          "inlier_count": 11,
+          "median_abs_y": 0.9168701171875,
+          "p95_abs_y": 1.340484619140625,
+          "median_disparity_x": 522.7840576171875
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.3853759765625,
+        "max_median_abs_y": 0.9168701171875,
+        "max_p95_abs_y": 1.62396240234375,
+        "median_disparity_x": 499.62791442871094
+      }
+    },
+    {
+      "group": "Single\\Metal submarine\\20 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Metal submarine\\20 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\20 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\20 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 14,
+          "inlier_count": 14,
+          "median_abs_y": 0.161468505859375,
+          "p95_abs_y": 1.1351898193359373,
+          "median_disparity_x": 474.4928970336914
+        },
+        {
+          "group": "Single\\Metal submarine\\20 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\20 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\20 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 13,
+          "inlier_count": 12,
+          "median_abs_y": 1.0865020751953125,
+          "p95_abs_y": 2.797201538085937,
+          "median_disparity_x": 484.2188415527344
+        },
+        {
+          "group": "Single\\Metal submarine\\20 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Metal submarine\\20 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Metal submarine\\20 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 56,
+          "inlier_count": 49,
+          "median_abs_y": 0.7320556640625,
+          "p95_abs_y": 2.1580810546874996,
+          "median_disparity_x": 545.6691589355469
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.7320556640625,
+        "max_median_abs_y": 1.0865020751953125,
+        "max_p95_abs_y": 2.797201538085937,
+        "median_disparity_x": 484.2188415527344
+      }
+    },
+    {
+      "group": "Single\\Plastic fish\\0 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Plastic fish\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 87,
+          "inlier_count": 84,
+          "median_abs_y": 0.4051971435546875,
+          "p95_abs_y": 1.3159271240234374,
+          "median_disparity_x": 399.7537384033203
+        },
+        {
+          "group": "Single\\Plastic fish\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 109,
+          "inlier_count": 101,
+          "median_abs_y": 0.72613525390625,
+          "p95_abs_y": 2.140655517578125,
+          "median_disparity_x": 454.06036376953125
+        },
+        {
+          "group": "Single\\Plastic fish\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 78,
+          "inlier_count": 71,
+          "median_abs_y": 0.87005615234375,
+          "p95_abs_y": 2.26544189453125,
+          "median_disparity_x": 502.14630126953125
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.72613525390625,
+        "max_median_abs_y": 0.87005615234375,
+        "max_p95_abs_y": 2.26544189453125,
+        "median_disparity_x": 454.06036376953125
+      }
+    },
+    {
+      "group": "Single\\Plastic fish\\10 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Plastic fish\\10 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\10 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\10 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 34,
+          "inlier_count": 30,
+          "median_abs_y": 0.7733306884765625,
+          "p95_abs_y": 3.1634651184082014,
+          "median_disparity_x": 551.5743865966797
+        },
+        {
+          "group": "Single\\Plastic fish\\10 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\10 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\10 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 51,
+          "inlier_count": 49,
+          "median_abs_y": 0.47332763671875,
+          "p95_abs_y": 1.682373046875,
+          "median_disparity_x": 514.5791015625
+        },
+        {
+          "group": "Single\\Plastic fish\\10 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\10 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\10 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 61,
+          "inlier_count": 53,
+          "median_abs_y": 0.3184814453125,
+          "p95_abs_y": 1.2109802246093744,
+          "median_disparity_x": 435.5968475341797
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.47332763671875,
+        "max_median_abs_y": 0.7733306884765625,
+        "max_p95_abs_y": 3.1634651184082014,
+        "median_disparity_x": 514.5791015625
+      }
+    },
+    {
+      "group": "Single\\Plastic fish\\20 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Plastic fish\\20 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\20 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\20 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 40,
+          "inlier_count": 37,
+          "median_abs_y": 0.65380859375,
+          "p95_abs_y": 1.6011413574218745,
+          "median_disparity_x": 514.8554382324219
+        },
+        {
+          "group": "Single\\Plastic fish\\20 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\20 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\20 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 37,
+          "inlier_count": 34,
+          "median_abs_y": 0.49041748046875,
+          "p95_abs_y": 1.7395622253417966,
+          "median_disparity_x": 512.0223236083984
+        },
+        {
+          "group": "Single\\Plastic fish\\20 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic fish\\20 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic fish\\20 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 2,
+          "inlier_count": 2,
+          "median_abs_y": 0.2502593994140625,
+          "p95_abs_y": 0.38241119384765626,
+          "median_disparity_x": 469.1875915527344
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.49041748046875,
+        "max_median_abs_y": 0.65380859375,
+        "max_p95_abs_y": 1.7395622253417966,
+        "median_disparity_x": 512.0223236083984
+      }
+    },
+    {
+      "group": "Single\\Plastic submarine\\0 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Plastic submarine\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 104,
+          "inlier_count": 98,
+          "median_abs_y": 1.002471923828125,
+          "p95_abs_y": 2.3475173950195303,
+          "median_disparity_x": 499.46502685546875
+        },
+        {
+          "group": "Single\\Plastic submarine\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 151,
+          "inlier_count": 137,
+          "median_abs_y": 0.6214599609375,
+          "p95_abs_y": 1.4492675781249997,
+          "median_disparity_x": 453.6986083984375
+        },
+        {
+          "group": "Single\\Plastic submarine\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 69,
+          "inlier_count": 66,
+          "median_abs_y": 0.307159423828125,
+          "p95_abs_y": 1.5475616455078125,
+          "median_disparity_x": 407.0450439453125
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.6214599609375,
+        "max_median_abs_y": 1.002471923828125,
+        "max_p95_abs_y": 2.3475173950195303,
+        "median_disparity_x": 453.6986083984375
+      }
+    },
+    {
+      "group": "Single\\Plastic submarine\\10 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Plastic submarine\\10 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\10 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\10 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 90,
+          "inlier_count": 80,
+          "median_abs_y": 0.3350830078125,
+          "p95_abs_y": 1.3045196533203118,
+          "median_disparity_x": 437.5442657470703
+        },
+        {
+          "group": "Single\\Plastic submarine\\10 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\10 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\10 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 24,
+          "inlier_count": 24,
+          "median_abs_y": 1.092681884765625,
+          "p95_abs_y": 2.710913085937499,
+          "median_disparity_x": 509.6344299316406
+        },
+        {
+          "group": "Single\\Plastic submarine\\10 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\10 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\10 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 13,
+          "inlier_count": 13,
+          "median_abs_y": 1.42535400390625,
+          "p95_abs_y": 4.993103027343745,
+          "median_disparity_x": 564.5947570800781
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 1.092681884765625,
+        "max_median_abs_y": 1.42535400390625,
+        "max_p95_abs_y": 4.993103027343745,
+        "median_disparity_x": 509.6344299316406
+      }
+    },
+    {
+      "group": "Single\\Plastic submarine\\20 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Plastic submarine\\20 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\20 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\20 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 24,
+          "inlier_count": 21,
+          "median_abs_y": 0.7602386474609375,
+          "p95_abs_y": 2.808807373046875,
+          "median_disparity_x": 562.9181823730469
+        },
+        {
+          "group": "Single\\Plastic submarine\\20 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\20 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\20 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 5,
+          "inlier_count": 4,
+          "median_abs_y": 1.0408935546875,
+          "p95_abs_y": 2.309988403320312,
+          "median_disparity_x": 496.7921447753906
+        },
+        {
+          "group": "Single\\Plastic submarine\\20 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Plastic submarine\\20 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Plastic submarine\\20 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 4,
+          "inlier_count": 4,
+          "median_abs_y": 1.18377685546875,
+          "p95_abs_y": 1.43839111328125,
+          "median_disparity_x": 540.4571228027344
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 1.0408935546875,
+        "max_median_abs_y": 1.18377685546875,
+        "max_p95_abs_y": 2.808807373046875,
+        "median_disparity_x": 540.4571228027344
+      }
+    },
+    {
+      "group": "Single\\Real fish\\0 NTU",
+      "pairs": [
+        {
+          "group": "Single\\Real fish\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Single\\Real fish\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Single\\Real fish\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 87,
+          "inlier_count": 83,
+          "median_abs_y": 0.94744873046875,
+          "p95_abs_y": 2.929431152343747,
+          "median_disparity_x": 517.6875915527344
+        },
+        {
+          "group": "Single\\Real fish\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Single\\Real fish\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Single\\Real fish\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 80,
+          "inlier_count": 70,
+          "median_abs_y": 0.99853515625,
+          "p95_abs_y": 2.1126937866210933,
+          "median_disparity_x": 478.14739990234375
+        },
+        {
+          "group": "Single\\Real fish\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Single\\Real fish\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Single\\Real fish\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 71,
+          "inlier_count": 62,
+          "median_abs_y": 0.48028564453125,
+          "p95_abs_y": 1.510760498046875,
+          "median_disparity_x": 439.1018981933594
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.94744873046875,
+        "max_median_abs_y": 0.99853515625,
+        "max_p95_abs_y": 2.929431152343747,
+        "median_disparity_x": 478.14739990234375
+      }
+    },
+    {
+      "group": "Mixed\\All mixed\\0 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\All mixed\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 128,
+          "inlier_count": 114,
+          "median_abs_y": 0.364776611328125,
+          "p95_abs_y": 1.452880859375,
+          "median_disparity_x": 445.8746337890625
+        },
+        {
+          "group": "Mixed\\All mixed\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 52,
+          "inlier_count": 49,
+          "median_abs_y": 0.66534423828125,
+          "p95_abs_y": 1.8665527343749997,
+          "median_disparity_x": 517.8152160644531
+        },
+        {
+          "group": "Mixed\\All mixed\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 34,
+          "inlier_count": 30,
+          "median_abs_y": 0.619720458984375,
+          "p95_abs_y": 2.102215576171875,
+          "median_disparity_x": 538.5134887695312
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.619720458984375,
+        "max_median_abs_y": 0.66534423828125,
+        "max_p95_abs_y": 2.102215576171875,
+        "median_disparity_x": 517.8152160644531
+      }
+    },
+    {
+      "group": "Mixed\\All mixed\\10 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\All mixed\\10 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\10 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\10 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 112,
+          "inlier_count": 102,
+          "median_abs_y": 0.42840576171875,
+          "p95_abs_y": 1.36452941894531,
+          "median_disparity_x": 441.55059814453125
+        },
+        {
+          "group": "Mixed\\All mixed\\10 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\10 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\10 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 32,
+          "inlier_count": 26,
+          "median_abs_y": 0.417938232421875,
+          "p95_abs_y": 1.7559661865234375,
+          "median_disparity_x": 507.8580322265625
+        },
+        {
+          "group": "Mixed\\All mixed\\10 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\10 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\10 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 33,
+          "inlier_count": 30,
+          "median_abs_y": 0.862579345703125,
+          "p95_abs_y": 2.657918548583983,
+          "median_disparity_x": 585.7505645751953
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.42840576171875,
+        "max_median_abs_y": 0.862579345703125,
+        "max_p95_abs_y": 2.657918548583983,
+        "median_disparity_x": 507.8580322265625
+      }
+    },
+    {
+      "group": "Mixed\\All mixed\\20 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\All mixed\\20 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\20 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\20 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 49,
+          "inlier_count": 41,
+          "median_abs_y": 0.48828125,
+          "p95_abs_y": 1.947296142578125,
+          "median_disparity_x": 454.8037109375
+        },
+        {
+          "group": "Mixed\\All mixed\\20 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\20 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\20 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 9,
+          "inlier_count": 8,
+          "median_abs_y": 0.60113525390625,
+          "p95_abs_y": 1.4867187499999996,
+          "median_disparity_x": 524.4144134521484
+        },
+        {
+          "group": "Mixed\\All mixed\\20 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\All mixed\\20 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\All mixed\\20 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 25,
+          "inlier_count": 23,
+          "median_abs_y": 0.9722900390625,
+          "p95_abs_y": 2.1731994628906244,
+          "median_disparity_x": 579.5195007324219
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.60113525390625,
+        "max_median_abs_y": 0.9722900390625,
+        "max_p95_abs_y": 2.1731994628906244,
+        "median_disparity_x": 524.4144134521484
+      }
+    },
+    {
+      "group": "Mixed\\Metal and Plastic submarine\\0 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 26,
+          "inlier_count": 22,
+          "median_abs_y": 0.663299560546875,
+          "p95_abs_y": 3.9356964111328114,
+          "median_disparity_x": 532.3977355957031
+        },
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 108,
+          "inlier_count": 101,
+          "median_abs_y": 0.955047607421875,
+          "p95_abs_y": 1.951141357421875,
+          "median_disparity_x": 488.30364990234375
+        },
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 217,
+          "inlier_count": 198,
+          "median_abs_y": 0.538482666015625,
+          "p95_abs_y": 1.2969512939453114,
+          "median_disparity_x": 441.7742004394531
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.663299560546875,
+        "max_median_abs_y": 0.955047607421875,
+        "max_p95_abs_y": 3.9356964111328114,
+        "median_disparity_x": 488.30364990234375
+      }
+    },
+    {
+      "group": "Mixed\\Metal and Plastic submarine\\10 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\10 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\10 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\10 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 8,
+          "inlier_count": 8,
+          "median_abs_y": 1.26080322265625,
+          "p95_abs_y": 2.427175140380859,
+          "median_disparity_x": 658.6873168945312
+        },
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\10 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\10 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\10 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 46,
+          "inlier_count": 39,
+          "median_abs_y": 0.51239013671875,
+          "p95_abs_y": 1.674301147460938,
+          "median_disparity_x": 517.3587951660156
+        },
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\10 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\10 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\10 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 90,
+          "inlier_count": 83,
+          "median_abs_y": 0.36492919921875,
+          "p95_abs_y": 1.3838409423828122,
+          "median_disparity_x": 439.86895751953125
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.51239013671875,
+        "max_median_abs_y": 1.26080322265625,
+        "max_p95_abs_y": 2.427175140380859,
+        "median_disparity_x": 517.3587951660156
+      }
+    },
+    {
+      "group": "Mixed\\Metal and Plastic submarine\\20 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\20 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\20 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\20 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 3,
+          "inlier_count": 2,
+          "median_abs_y": 1.0604248046875,
+          "p95_abs_y": 1.0604248046875,
+          "median_disparity_x": 446.7038879394531
+        },
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\20 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\20 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\20 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 15,
+          "inlier_count": 14,
+          "median_abs_y": 1.28564453125,
+          "p95_abs_y": 3.1547058105468744,
+          "median_disparity_x": 543.7600402832031
+        },
+        {
+          "group": "Mixed\\Metal and Plastic submarine\\20 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\20 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal and Plastic submarine\\20 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 23,
+          "inlier_count": 20,
+          "median_abs_y": 0.65777587890625,
+          "p95_abs_y": 2.0379791259765634,
+          "median_disparity_x": 574.2280883789062
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 1.0604248046875,
+        "max_median_abs_y": 1.28564453125,
+        "max_p95_abs_y": 3.1547058105468744,
+        "median_disparity_x": 543.7600402832031
+      }
+    },
+    {
+      "group": "Mixed\\Metal submarine and Plastic fish\\0 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 24,
+          "inlier_count": 20,
+          "median_abs_y": 1.078887939453125,
+          "p95_abs_y": 2.0847686767578124,
+          "median_disparity_x": 546.604248046875
+        },
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 66,
+          "inlier_count": 57,
+          "median_abs_y": 0.78411865234375,
+          "p95_abs_y": 3.0413696289062484,
+          "median_disparity_x": 460.1272735595703
+        },
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 203,
+          "inlier_count": 193,
+          "median_abs_y": 0.45281982421875,
+          "p95_abs_y": 1.578411865234373,
+          "median_disparity_x": 441.02764892578125
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.78411865234375,
+        "max_median_abs_y": 1.078887939453125,
+        "max_p95_abs_y": 3.0413696289062484,
+        "median_disparity_x": 460.1272735595703
+      }
+    },
+    {
+      "group": "Mixed\\Metal submarine and Plastic fish\\10 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\10 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\10 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\10 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 84,
+          "inlier_count": 77,
+          "median_abs_y": 0.380462646484375,
+          "p95_abs_y": 1.2282714843750004,
+          "median_disparity_x": 443.6526412963867
+        },
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\10 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\10 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\10 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 23,
+          "inlier_count": 21,
+          "median_abs_y": 0.69183349609375,
+          "p95_abs_y": 2.165283203125,
+          "median_disparity_x": 484.85205078125
+        },
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\10 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\10 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\10 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 20,
+          "inlier_count": 17,
+          "median_abs_y": 0.17633056640625,
+          "p95_abs_y": 1.5013427734375,
+          "median_disparity_x": 560.9418334960938
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.380462646484375,
+        "max_median_abs_y": 0.69183349609375,
+        "max_p95_abs_y": 2.165283203125,
+        "median_disparity_x": 484.85205078125
+      }
+    },
+    {
+      "group": "Mixed\\Metal submarine and Plastic fish\\20 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\20 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\20 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\20 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 2,
+          "inlier_count": 2,
+          "median_abs_y": 1.654998779296875,
+          "p95_abs_y": 2.1538604736328124,
+          "median_disparity_x": 560.890869140625
+        },
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\20 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\20 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\20 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 7,
+          "inlier_count": 6,
+          "median_abs_y": 0.89263916015625,
+          "p95_abs_y": 2.4765701293945312,
+          "median_disparity_x": 487.0245666503906
+        },
+        {
+          "group": "Mixed\\Metal submarine and Plastic fish\\20 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\20 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Plastic fish\\20 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 34,
+          "inlier_count": 30,
+          "median_abs_y": 0.23876953125,
+          "p95_abs_y": 1.3814514160156244,
+          "median_disparity_x": 465.2534942626953
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.89263916015625,
+        "max_median_abs_y": 1.654998779296875,
+        "max_p95_abs_y": 2.4765701293945312,
+        "median_disparity_x": 487.0245666503906
+      }
+    },
+    {
+      "group": "Mixed\\Metal submarine and Real fish\\0 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Metal submarine and Real fish\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Real fish\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Real fish\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 88,
+          "inlier_count": 83,
+          "median_abs_y": 0.5113525390625,
+          "p95_abs_y": 0.9515319824218748,
+          "median_disparity_x": 433.6121826171875
+        },
+        {
+          "group": "Mixed\\Metal submarine and Real fish\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Real fish\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Real fish\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 112,
+          "inlier_count": 97,
+          "median_abs_y": 0.77886962890625,
+          "p95_abs_y": 1.7224426269531243,
+          "median_disparity_x": 480.16339111328125
+        },
+        {
+          "group": "Mixed\\Metal submarine and Real fish\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Real fish\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Metal submarine and Real fish\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 284,
+          "inlier_count": 250,
+          "median_abs_y": 0.52667236328125,
+          "p95_abs_y": 1.3774780273437497,
+          "median_disparity_x": 433.84033203125
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.52667236328125,
+        "max_median_abs_y": 0.77886962890625,
+        "max_p95_abs_y": 1.7224426269531243,
+        "median_disparity_x": 433.84033203125
+      }
+    },
+    {
+      "group": "Mixed\\Plastic fish and Real fish\\0 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Plastic fish and Real fish\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic fish and Real fish\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic fish and Real fish\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 218,
+          "inlier_count": 195,
+          "median_abs_y": 0.44134521484375,
+          "p95_abs_y": 1.4345397949218737,
+          "median_disparity_x": 439.05657958984375
+        },
+        {
+          "group": "Mixed\\Plastic fish and Real fish\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic fish and Real fish\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic fish and Real fish\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 55,
+          "inlier_count": 48,
+          "median_abs_y": 0.4906005859375,
+          "p95_abs_y": 2.6780120849609372,
+          "median_disparity_x": 496.31803131103516
+        },
+        {
+          "group": "Mixed\\Plastic fish and Real fish\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic fish and Real fish\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic fish and Real fish\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 24,
+          "inlier_count": 21,
+          "median_abs_y": 0.92303466796875,
+          "p95_abs_y": 2.5396728515625,
+          "median_disparity_x": 556.638671875
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.4906005859375,
+        "max_median_abs_y": 0.92303466796875,
+        "max_p95_abs_y": 2.6780120849609372,
+        "median_disparity_x": 496.31803131103516
+      }
+    },
+    {
+      "group": "Mixed\\Plastic submarine and Plastic fish\\0 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 10,
+          "inlier_count": 9,
+          "median_abs_y": 0.61236572265625,
+          "p95_abs_y": 1.65142822265625,
+          "median_disparity_x": 512.9792175292969
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 67,
+          "inlier_count": 62,
+          "median_abs_y": 0.945770263671875,
+          "p95_abs_y": 2.09473876953125,
+          "median_disparity_x": 484.7658996582031
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 237,
+          "inlier_count": 220,
+          "median_abs_y": 0.61712646484375,
+          "p95_abs_y": 1.5930160522460937,
+          "median_disparity_x": 445.2940216064453
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.61712646484375,
+        "max_median_abs_y": 0.945770263671875,
+        "max_p95_abs_y": 2.09473876953125,
+        "median_disparity_x": 484.7658996582031
+      }
+    },
+    {
+      "group": "Mixed\\Plastic submarine and Plastic fish\\10 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\10 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\10 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\10 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 56,
+          "inlier_count": 51,
+          "median_abs_y": 0.89678955078125,
+          "p95_abs_y": 3.6559295654296875,
+          "median_disparity_x": 546.7342834472656
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\10 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\10 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\10 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 30,
+          "inlier_count": 26,
+          "median_abs_y": 0.53350830078125,
+          "p95_abs_y": 2.3006439208984375,
+          "median_disparity_x": 488.17787170410156
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\10 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\10 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\10 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 84,
+          "inlier_count": 76,
+          "median_abs_y": 0.3876953125,
+          "p95_abs_y": 1.720306396484375,
+          "median_disparity_x": 447.47369384765625
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.53350830078125,
+        "max_median_abs_y": 0.89678955078125,
+        "max_p95_abs_y": 3.6559295654296875,
+        "median_disparity_x": 488.17787170410156
+      }
+    },
+    {
+      "group": "Mixed\\Plastic submarine and Plastic fish\\20 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\20 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\20 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\20 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 31,
+          "inlier_count": 28,
+          "median_abs_y": 0.70123291015625,
+          "p95_abs_y": 2.0199249267578123,
+          "median_disparity_x": 557.9461517333984
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\20 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\20 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\20 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 26,
+          "inlier_count": 23,
+          "median_abs_y": 0.9815673828125,
+          "p95_abs_y": 1.798501586914062,
+          "median_disparity_x": 506.021240234375
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Plastic fish\\20 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\20 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Plastic fish\\20 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 6,
+          "inlier_count": 5,
+          "median_abs_y": 0.351654052734375,
+          "p95_abs_y": 2.0760498046875,
+          "median_disparity_x": 450.2189636230469
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.70123291015625,
+        "max_median_abs_y": 0.9815673828125,
+        "max_p95_abs_y": 2.0760498046875,
+        "median_disparity_x": 506.021240234375
+      }
+    },
+    {
+      "group": "Mixed\\Plastic submarine and Real fish\\0 NTU",
+      "pairs": [
+        {
+          "group": "Mixed\\Plastic submarine and Real fish\\0 NTU",
+          "stem": "000",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\left\\000.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\right\\000.png",
+          "status": "ok",
+          "match_count": 233,
+          "inlier_count": 211,
+          "median_abs_y": 0.56988525390625,
+          "p95_abs_y": 1.511260986328125,
+          "median_disparity_x": 445.45697021484375
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Real fish\\0 NTU",
+          "stem": "022",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\left\\022.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\right\\022.png",
+          "status": "ok",
+          "match_count": 108,
+          "inlier_count": 101,
+          "median_abs_y": 0.804107666015625,
+          "p95_abs_y": 2.15283203125,
+          "median_disparity_x": 495.2857666015625
+        },
+        {
+          "group": "Mixed\\Plastic submarine and Real fish\\0 NTU",
+          "stem": "044",
+          "left": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\left\\044.png",
+          "right": "datasets\\Rectified_v2\\Mixed\\Plastic submarine and Real fish\\0 NTU\\right\\044.png",
+          "status": "ok",
+          "match_count": 29,
+          "inlier_count": 26,
+          "median_abs_y": 1.110015869140625,
+          "p95_abs_y": 4.750823974609375,
+          "median_disparity_x": 539.6347045898438
+        }
+      ],
+      "aggregate": {
+        "pair_count": 3,
+        "ok_count": 3,
+        "insufficient_count": 0,
+        "median_of_median_abs_y": 0.804107666015625,
+        "max_median_abs_y": 1.110015869140625,
+        "max_p95_abs_y": 4.750823974609375,
+        "median_disparity_x": 495.2857666015625
+      }
+    }
+  ],
+  "overall": {
+    "pair_count": 75,
+    "ok_count": 75,
+    "insufficient_count": 0,
+    "median_of_median_abs_y": 0.65380859375,
+    "max_median_abs_y": 1.654998779296875,
+    "max_p95_abs_y": 4.993103027343745,
+    "median_disparity_x": 495.2857666015625
+  },
+  "decision": {
+    "passed": false,
+    "failed_pair_count": 24,
+    "reasons": [
+      "Single\\Metal submarine\\10 NTU/044: insufficient inliers (11 retained of 12 raw matches < 15)",
+      "Single\\Metal submarine\\20 NTU/000: insufficient inliers (14 retained of 14 raw matches < 15)",
+      "Single\\Metal submarine\\20 NTU/022: insufficient inliers (12 retained of 13 raw matches < 15)",
+      "Single\\Plastic fish\\10 NTU/000: p95 |dy| 3.163 px exceeds 3.000 px",
+      "Single\\Plastic fish\\20 NTU/044: insufficient inliers (2 retained of 2 raw matches < 15)",
+      "Single\\Plastic submarine\\0 NTU/000: median |dy| 1.002 px exceeds 1.000 px",
+      "Single\\Plastic submarine\\10 NTU/022: median |dy| 1.093 px exceeds 1.000 px",
+      "Single\\Plastic submarine\\10 NTU/044: insufficient inliers (13 retained of 13 raw matches < 15)",
+      "Single\\Plastic submarine\\20 NTU/022: insufficient inliers (4 retained of 5 raw matches < 15)",
+      "Single\\Plastic submarine\\20 NTU/044: insufficient inliers (4 retained of 4 raw matches < 15)",
+      "Mixed\\All mixed\\20 NTU/022: insufficient inliers (8 retained of 9 raw matches < 15)",
+      "Mixed\\Metal and Plastic submarine\\0 NTU/000: p95 |dy| 3.936 px exceeds 3.000 px",
+      "Mixed\\Metal and Plastic submarine\\10 NTU/000: insufficient inliers (8 retained of 8 raw matches < 15)",
+      "Mixed\\Metal and Plastic submarine\\20 NTU/000: insufficient inliers (2 retained of 3 raw matches < 15)",
+      "Mixed\\Metal and Plastic submarine\\20 NTU/022: insufficient inliers (14 retained of 15 raw matches < 15)",
+      "Mixed\\Metal submarine and Plastic fish\\0 NTU/000: median |dy| 1.079 px exceeds 1.000 px",
+      "Mixed\\Metal submarine and Plastic fish\\0 NTU/022: p95 |dy| 3.041 px exceeds 3.000 px",
+      "Mixed\\Metal submarine and Plastic fish\\20 NTU/000: insufficient inliers (2 retained of 2 raw matches < 15)",
+      "Mixed\\Metal submarine and Plastic fish\\20 NTU/022: insufficient inliers (6 retained of 7 raw matches < 15)",
+      "Mixed\\Plastic submarine and Plastic fish\\0 NTU/000: insufficient inliers (9 retained of 10 raw matches < 15)",
+      "Mixed\\Plastic submarine and Plastic fish\\10 NTU/000: p95 |dy| 3.656 px exceeds 3.000 px",
+      "Mixed\\Plastic submarine and Plastic fish\\20 NTU/044: insufficient inliers (5 retained of 6 raw matches < 15)",
+      "Mixed\\Plastic submarine and Real fish\\0 NTU/044: median |dy| 1.110 px exceeds 1.000 px",
+      "Mixed\\Plastic submarine and Real fish\\0 NTU/044: p95 |dy| 4.751 px exceeds 3.000 px"
+    ]
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "split": "test",
+  "n_samples": 362,
+  "class_names": [
+    "metal_submarine",
+    "plastic_submarine",
+    "plastic_fish",
+    "real_fish"
+  ],
+  "gray": {
+    "weights": "runs\\train\\run_20260914_manual_labels\\model_b-gray\\weights\\best.pt",
+    "confusion_matrix": [
+      [
+        45,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        91,
+        5,
+        2
+      ],
+      [
+        0,
+        0,
+        135,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        82
+      ]
+    ],
+    "per_class": {
+      "metal_submarine": {
+        "precision": 1.0,
+        "recall": 0.9782608695652174,
+        "f1": 0.989010989010989,
+        "support": 46
+      },
+      "plastic_submarine": {
+        "precision": 1.0,
+        "recall": 0.9285714285714286,
+        "f1": 0.962962962962963,
+        "support": 98
+      },
+      "plastic_fish": {
+        "precision": 0.9574468085106383,
+        "recall": 1.0,
+        "f1": 0.9782608695652174,
+        "support": 135
+      },
+      "real_fish": {
+        "precision": 0.9647058823529412,
+        "recall": 0.9879518072289156,
+        "f1": 0.9761904761904762,
+        "support": 83
+      }
+    },
+    "macro_f1": 0.9766063244324115,
+    "accuracy": 0.9751381215469613,
+    "n_samples": 362
+  },
+  "polar": {
+    "weights": "runs\\train\\run_20260914_manual_labels\\model_b-polar\\weights\\best.pt",
+    "confusion_matrix": [
+      [
+        44,
+        0,
+        1,
+        1
+      ],
+      [
+        0,
+        94,
+        3,
+        1
+      ],
+      [
+        0,
+        0,
+        135,
+        0
+      ],
+      [
+        0,
+        0,
+        16,
+        67
+      ]
+    ],
+    "per_class": {
+      "metal_submarine": {
+        "precision": 1.0,
+        "recall": 0.9565217391304348,
+        "f1": 0.9777777777777777,
+        "support": 46
+      },
+      "plastic_submarine": {
+        "precision": 1.0,
+        "recall": 0.9591836734693877,
+        "f1": 0.9791666666666666,
+        "support": 98
+      },
+      "plastic_fish": {
+        "precision": 0.8709677419354839,
+        "recall": 1.0,
+        "f1": 0.9310344827586207,
+        "support": 135
+      },
+      "real_fish": {
+        "precision": 0.9710144927536232,
+        "recall": 0.8072289156626506,
+        "f1": 0.881578947368421,
+        "support": 83
+      }
+    },
+    "macro_f1": 0.9423894686428715,
+    "accuracy": 0.9392265193370166,
+    "n_samples": 362
+  },
+  "paired_difference": {
+    "macro_f1_diff": -0.034216855789539924
+  },
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 2026,
+    "ci_level": 0.95,
+    "ci_low": -0.08133679523849502,
+    "ci_high": 0.007883394495970641,
+    "mean_diff": -0.03188351646140965,
+    "n_groups": 4
+  },
+  "decision": {
+    "gate": "fail",
+    "decision": "use_gray_only",
+    "reason": "no proven gain: macro-F1 diff -0.0342 (need >= 0.03) with CI lower bound -0.0813 (need > 0)",
+    "macro_f1_diff": -0.034216855789539924,
+    "min_gain": 0.03
+  }
+}

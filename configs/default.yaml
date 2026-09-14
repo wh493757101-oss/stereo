@@ -1,0 +1,160 @@
+# Underwater stereo polarization detection and ranging system - default config
+
+# Runtime inference paths are relative to the project root. The checkpoints
+# below are the accepted outputs of the completed formal training runs.
+# Model A: grayscale-copied 3-channel instance segmentation (stage 1)
+model_a:
+  path: "runs/train/run_20260913_initial/model_a/weights/best.pt"
+  backend: "pytorch"
+  in_channels: 3
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  imgsz: 640
+
+# Model B: material classification (stage 3). input_mode selects the crop
+# channels: "polar" -> [gray, polar, gray], "gray" -> [gray, gray, gray].
+# Gray-only is the runtime default because the formal ablation gate in
+# analysis/runs/run_20260913_initial/model_b_ablation_test.json failed to prove a polarization gain
+# (macro-F1 diff 0.0002 < 0.03 min gain, bootstrap CI lower bound -0.0029).
+model_b:
+  path: "runs/train/run_20260913_initial/model_b-gray/weights/best.pt"
+  input_mode: "gray"
+  backend: "pytorch"
+  in_channels: 3
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  imgsz: 224
+
+# Live inference runtime (engine-independent of the sections above)
+runtime:
+  device: "auto"        # auto -> "0" when torch.cuda.is_available() else "cpu"
+  crop_padding: 10      # px added around each Model B crop
+  sync_skew_ms: 2.0     # max tolerated left/right timestamp skew
+
+# Camera
+camera:
+  source: ""
+  width: 1280
+  height: 1024
+  # "software" (default, safe): host issues TriggerSoftware per frame and
+  # estimates skew from host command timestamps. "hardware": both cameras
+  # are triggered from a shared hardware line (Line0); skew is unavailable
+  # rather than zero, so depth is processed but sync is reported unmeasured.
+  trigger_source: "software"
+  # Max trusted left/right skew in ms; pairs beyond this are not depth-validated.
+  max_sync_skew_ms: 2.0
+  # True when incoming/playback frames are already rectified (skip re-remap).
+  already_rectified: false
+
+# Calibration
+calibration:
+  file: "datasets/bd_image/stereo_calib.npz"
+  r_convention: "matlab"
+  baseline: 0.09890970798524992
+  focal_length: 3643.5231322766995
+
+# Versioned, non-destructive data preparation. `enabled` also toggles
+# online rectification in the live inference engine; `alpha` feeds
+# cv2.stereoRectify in both paths.
+rectification:
+  enabled: true
+  output_root: "datasets/Rectified_v2"
+  alpha: 0.0
+
+data:
+  annotations_root: "datasets/bz_JSON_v2"
+  segmentation_root: "datasets/underwater_seg_v2"
+  segmentation_binary_root: "datasets/underwater_seg_binary_v2"
+  cls_gray_root: "datasets/underwater_cls_gray_v2"
+  cls_polar_root: "datasets/underwater_cls_polar_v2"
+
+# Stereo matching (OpenCV StereoSGBM, dense, left-right consistency checked)
+# max_disp / block_size / lr_check_threshold_px are full-resolution pixels;
+# matching runs at `scale` of the input size internally.
+stereo:
+  matcher: "sgbm"
+  mode: "3way"
+  scale: 0.25
+  max_disp: 768
+  block_size: 7
+  lr_check_threshold_px: 2.0
+  min_valid_ratio: 0.05
+  uniqueness_ratio: 10
+  speckle_window: 100
+  speckle_range: 32
+  texture_threshold: 10.0
+
+# Polarization
+polarization:
+  epsilon: 0.000001
+
+# Training (see scripts/train_models.py; all stages seed 2026, deterministic,
+# AMP, early stopping with patience 20, explicit project/name, best+last saved)
+training:
+  seed: 2026
+  patience: 20
+  project: "runs/train"
+  # Dataloader workers forwarded to every training stage. Default 0 on
+  # Windows: spawned data-loader processes re-import torch and fail to load
+  # the CUDA DLLs. Other platforms use the Ultralytics default of 8.
+  workers: 0
+  baseline:
+    base: "yolov8n-seg.pt"
+    data: "datasets/underwater_seg_v2/data.yaml"
+    epochs: 100
+    imgsz: 640
+    batch: 8
+    device: "0"
+  model_a:
+    base: "yolov8n-seg.pt"
+    data: "datasets/underwater_seg_binary_v2/data.yaml"
+    epochs: 100
+    imgsz: 640
+    batch: 8
+    device: "0"
+  model_b_gray:
+    base: "yolov8n-cls.pt"
+    data: "datasets/underwater_cls_gray_v2"
+    epochs: 80
+    imgsz: 224
+    batch: 64
+    device: "0"
+    auto_augment: null
+    erasing: 0.0
+    hsv_h: 0.0
+    hsv_s: 0.0
+    hsv_v: 0.0
+  model_b_polar:
+    base: "yolov8n-cls.pt"
+    data: "datasets/underwater_cls_polar_v2"
+    epochs: 80
+    imgsz: 224
+    batch: 64
+    device: "0"
+    auto_augment: null
+    erasing: 0.0
+    hsv_h: 0.0
+    hsv_s: 0.0
+    hsv_v: 0.0
+
+# Paired ablation evaluation (scripts/eval_ablation.py).
+# The claim gate passes only when polar macro-F1 exceeds gray by at least
+# min_macro_f1_gain AND the bootstrap CI lower bound of the gain is > 0;
+# otherwise use gray-only (no proven gain). Formal checkpoints and the test
+# report exists under runs/train/ and
+# analysis/runs/run_20260913_initial/model_b_ablation_test.json.
+evaluation:
+  split: "test"
+  gray_weights: "runs/train/run_20260913_initial/model_b-gray/weights/best.pt"
+  polar_weights: "runs/train/run_20260913_initial/model_b-polar/weights/best.pt"
+  min_macro_f1_gain: 0.03
+  bootstrap_resamples: 2000
+  bootstrap_seed: 2026
+  ci_level: 0.95
+  ci_group: "capture-group"
+
+# Export
+export:
+  imgsz: 640
+  half: true
+  workspace: 4

@@ -1,0 +1,101 @@
+{
+  "audit_date": "2026-09-14",
+  "status": "ready_for_training",
+  "training_started_by_audit": false,
+  "annotation_revision": "manual_20260914",
+  "labelme": {
+    "root": "datasets/bz_JSON_v2",
+    "json_files": 1125,
+    "image_paths_resolved": 1125,
+    "image_data_all_null": true,
+    "polygon_shapes_before_exact_deduplication": 2812,
+    "labels": {
+      "metal_submarine": 608,
+      "plastic_submarine": 649,
+      "plastic_fish": 1100,
+      "real_fish": 455
+    },
+    "parse_or_geometry_errors": 0
+  },
+  "shared_split": {
+    "strategy": "capture_group",
+    "groups": 25,
+    "group_leakage": false,
+    "images": {
+      "train": 765,
+      "val": 180,
+      "test": 180
+    },
+    "pair_manifest_sha256": "56094B6A83CF6ABA4B873944B5EE8012371A6E6C1563F298A64959A8884EFB50",
+    "split_assignment_sha256": "50EF12D888B5EC4B43F8D32FD642895D1A68AA100005B2C8D502D37425419E2D"
+  },
+  "segmentation": {
+    "root": "datasets/underwater_seg_v2",
+    "exact_duplicate_annotations_removed": 4,
+    "images_and_labels_match": true,
+    "normalized_polygon_errors": 0,
+    "objects": {
+      "train": 2078,
+      "val": 368,
+      "test": 362,
+      "total": 2808
+    },
+    "objects_by_class_id": {
+      "0": 608,
+      "1": 645,
+      "2": 1100,
+      "3": 455
+    },
+    "empty_images": {
+      "train": 4,
+      "val": 0,
+      "test": 0
+    }
+  },
+  "binary_segmentation": {
+    "root": "datasets/underwater_seg_binary_v2",
+    "images_and_labels_match": true,
+    "class_ids": [0],
+    "objects": {
+      "train": 2078,
+      "val": 368,
+      "test": 362,
+      "total": 2808
+    },
+    "empty_images": {
+      "train": 4,
+      "val": 0,
+      "test": 0
+    }
+  },
+  "classification": {
+    "gray_root": "datasets/underwater_cls_gray_v2",
+    "polar_root": "datasets/underwater_cls_polar_v2",
+    "paired_manifests_identical": true,
+    "manifest_sha256": "2C19C57F20EE3B3EA1592380E9F2CB1D83A0ADDA5A250A3C3E647D9396AD426B",
+    "samples": {
+      "train": 2078,
+      "val": 368,
+      "test": 362,
+      "total": 2808
+    },
+    "gray_images": 2808,
+    "polar_images": 2808,
+    "missing_or_decode_errors": 0
+  },
+  "image_checks": {
+    "training_image_paths_verified": 7866,
+    "missing_empty_or_decode_errors": 0
+  },
+  "environment": {
+    "python": "3.11.15",
+    "torch": "2.12.1+cu130",
+    "ultralytics": "8.4.71",
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "pip_check": "no_broken_requirements",
+    "drive_d_free_gb_at_audit": 49.6
+  },
+  "recommended_run_id": "run_20260914_manual_labels",
+  "note": "The four checkpoints in run_20260913_initial predate the manual_20260914 annotation revision. Use one new run id for all retrained stages and keep the initial run for rollback."
+}

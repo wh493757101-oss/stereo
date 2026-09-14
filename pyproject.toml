@@ -1,0 +1,10 @@
+[project]
+name = "underwater-stereo-polarization"
+version = "0.1.0"
+description = "Underwater stereo polarization detection and ranging pipeline"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--basetemp=tests/_tmp_pytest -p no:cacheprovider"

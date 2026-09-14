@@ -1,0 +1,98 @@
+{
+  "review_date": "2026-09-14",
+  "run_id": "run_20260914_manual_labels",
+  "status": "review_complete_partial_promotion_recommended",
+  "configuration_updated": false,
+  "training_integrity": {
+    "all_four_stages_present": true,
+    "all_best_and_last_weights_present": true,
+    "all_results_finite": true,
+    "tasks_and_class_names_valid": true,
+    "parameters_match_preflight": true
+  },
+  "comparison_run": "run_20260913_initial",
+  "segmentation_test": {
+    "images": 180,
+    "instances": 362,
+    "model_baseline": {
+      "old": {
+        "box_map50": 0.8956193134562385,
+        "box_map50_95": 0.7743963453057423,
+        "mask_map50": 0.8961877354739194,
+        "mask_map50_95": 0.7323159921773126
+      },
+      "candidate": {
+        "box_map50": 0.9007149049835296,
+        "box_map50_95": 0.7518231099952197,
+        "mask_map50": 0.9010962726125916,
+        "mask_map50_95": 0.7111549657656344
+      },
+      "delta": {
+        "box_map50": 0.0050955915272911,
+        "box_map50_95": -0.0225732353105226,
+        "mask_map50": 0.0049085371386722,
+        "mask_map50_95": -0.0211610264116782
+      },
+      "decision": "do_not_promote",
+      "reason": "Loose-IoU mAP50 improved slightly, but both box and mask mAP50-95 declined by more than two percentage points."
+    },
+    "model_a": {
+      "old": {
+        "box_map50": 0.9099538592937554,
+        "box_map50_95": 0.8143227862784252,
+        "mask_map50": 0.9107950408222909,
+        "mask_map50_95": 0.76861205525624
+      },
+      "candidate": {
+        "box_map50": 0.9028338883002758,
+        "box_map50_95": 0.7909046849099787,
+        "mask_map50": 0.9167990029169364,
+        "mask_map50_95": 0.7564470183929405
+      },
+      "delta": {
+        "box_map50": -0.0071199709934796,
+        "box_map50_95": -0.0234181013684465,
+        "mask_map50": 0.0060039620946455,
+        "mask_map50_95": -0.0121650368632995
+      },
+      "decision": "do_not_promote_without_visual_review",
+      "reason": "Mask mAP50 and recall improved, but strict box and mask mAP50-95 declined. Only two test frames were manually changed, so aggregate test metrics do not directly measure most correction benefits."
+    }
+  },
+  "classification_test": {
+    "samples": 362,
+    "model_b_gray": {
+      "old_macro_f1": 0.9617995903264173,
+      "candidate_macro_f1": 0.9766063244324115,
+      "macro_f1_delta": 0.0148067341059942,
+      "old_accuracy": 0.9613259668508287,
+      "candidate_accuracy": 0.9751381215469613,
+      "accuracy_delta": 0.0138121546961326,
+      "old_errors": 14,
+      "candidate_errors": 9,
+      "decision": "promote_candidate"
+    },
+    "model_b_polar": {
+      "old_macro_f1": 0.9619850320999763,
+      "candidate_macro_f1": 0.9423894686428715,
+      "macro_f1_delta": -0.0195955634571048,
+      "old_accuracy": 0.9613259668508287,
+      "candidate_accuracy": 0.9392265193370166,
+      "accuracy_delta": -0.0220994475138121,
+      "old_errors": 14,
+      "candidate_errors": 22,
+      "real_fish_recall": 0.8072289156626506,
+      "decision": "do_not_promote"
+    },
+    "ablation": {
+      "polar_minus_gray_macro_f1": -0.034216855789539924,
+      "bootstrap_ci_95": [
+        -0.08133679523849502,
+        0.007883394495970641
+      ],
+      "gate": "fail",
+      "decision": "use_gray_only"
+    }
+  },
+  "recommended_next_action": "Keep the current runtime configuration until the corrected-shape visual regression is reviewed. Then promote only the new gray classifier if the visual review finds no blocking issue."
+}

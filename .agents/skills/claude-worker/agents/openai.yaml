@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Worker"
+  short_description: "Delegate bounded project tasks to Claude Code safely"
+  default_prompt: "Use $claude-worker to delegate this bounded implementation task to Claude Code and review the result."

@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "inventory_date": "2026-09-14",
+  "project_status": "manual_annotations_retrained_candidates_reviewed_not_promoted",
+  "environment": {
+    "python": "3.11.15",
+    "pytorch": "2.12.1+cu130",
+    "torchvision": "0.27.1+cu130",
+    "ultralytics": "8.4.71",
+    "gpu": "NVIDIA GeForce RTX 4060"
+  },
+  "data": {
+    "raw_sources_retained": [
+      "datasets/Single",
+      "datasets/Mixed",
+      "datasets/bd_image"
+    ],
+    "rectified_root": "datasets/Rectified_v2",
+    "rectified_pairs": 1125,
+    "annotation_root": "datasets/bz_JSON_v2",
+    "annotation_json": 1125,
+    "segmentation_root": "datasets/underwater_seg_v2",
+    "segmentation_polygons": 2808,
+    "binary_segmentation_root": "datasets/underwater_seg_binary_v2",
+    "split_images": {
+      "train": 765,
+      "val": 180,
+      "test": 180
+    },
+    "capture_groups": {
+      "train": 17,
+      "val": 4,
+      "test": 4
+    },
+    "classification_gray_images": 2808,
+    "classification_polar_images": 2808,
+    "negative_training_images": 4
+  },
+  "annotation_revision": {
+    "name": "manual_20260914",
+    "changed_json_files": 83,
+    "changed_shapes": 83,
+    "label_changes": 0,
+    "shape_count_delta": 0,
+    "audit_report": "analysis/data/manual_annotation_changes_20260914.json",
+    "derived_datasets_rebuilt": true
+  },
+  "rectification_qa": {
+    "checkerboard_median_vertical_error_px": 0.0849,
+    "scene_median_vertical_error_px": 0.6538
+  },
+  "formal_models": {
+    "run_id": "run_20260913_initial",
+    "baseline": "runs/train/run_20260913_initial/model_baseline/weights/best.pt",
+    "model_a": "runs/train/run_20260913_initial/model_a/weights/best.pt",
+    "model_b_gray": "runs/train/run_20260913_initial/model_b-gray/weights/best.pt",
+    "model_b_polar": "runs/train/run_20260913_initial/model_b-polar/weights/best.pt"
+  },
+  "candidate_models": {
+    "run_id": "run_20260914_manual_labels",
+    "baseline": "runs/train/run_20260914_manual_labels/model_baseline/weights/best.pt",
+    "model_a": "runs/train/run_20260914_manual_labels/model_a/weights/best.pt",
+    "model_b_gray": "runs/train/run_20260914_manual_labels/model_b-gray/weights/best.pt",
+    "model_b_polar": "runs/train/run_20260914_manual_labels/model_b-polar/weights/best.pt",
+    "review": "analysis/runs/run_20260914_manual_labels/training_review.json"
+  },
+  "model_revision": {
+    "accepted_weights_from_pre_manual_revision": true,
+    "retrained_on_manual_20260914": true,
+    "candidate_run_reviewed": true,
+    "configuration_promoted": false,
+    "post_edit_evaluation_completed": true,
+    "post_edit_metrics_identical_to_previous": true
+  },
+  "test_evaluation": {
+    "images": 180,
+    "instances": 362,
+    "baseline_mask_map50": 0.89619,
+    "baseline_mask_map50_95": 0.73232,
+    "model_a_mask_map50": 0.9108,
+    "model_a_mask_map50_95": 0.76861,
+    "weakest_baseline_class": "real_fish",
+    "weakest_baseline_class_mask_map50_95": 0.45208,
+    "model_b_gray_macro_f1": 0.9618,
+    "model_b_polar_macro_f1": 0.961985,
+    "model_b_macro_f1_difference": 0.000185,
+    "model_b_bootstrap_ci95": [
+      -0.002919,
+      0.011499
+    ],
+    "polar_gain_gate_passed": false,
+    "accepted_model_b_mode": "gray"
+  },
+  "runtime_benchmark": {
+    "report": "analysis/runs/run_20260913_initial/pipeline_speed_test.json",
+    "device": "cuda:0",
+    "real_rectified_pair": true,
+    "instances": 2,
+    "valid_depths": 2,
+    "mean_ms": 165.96,
+    "fps": 6.0,
+    "target_30_fps_met": false
+  },
+  "sha256": {
+    "source_archive": "FF502C634E80FAB68E9246FB0A5AA02915E24DF88DC4A54DDF3047D6C12EA256",
+    "stereo_calibration": "60D79F02FCA23C99244B2F172189B4D8E3D713A6101281D8341445920924ACA8",
+    "rectification_parameters": "DBF5878D883E0EE20A7588FBBDF2265BA5823DE17F8192A51C26D3A22F1E0537",
+    "pair_manifest": "56094B6A83CF6ABA4B873944B5EE8012371A6E6C1563F298A64959A8884EFB50",
+    "split_assignment": "50EF12D888B5EC4B43F8D32FD642895D1A68AA100005B2C8D502D37425419E2D",
+    "baseline_best": "B016D240796B960B46E3BE5EB5ED90784EB5FD606C68D9528F0F7D03B00E9F93",
+    "model_a_best": "A1F6AABAC8E3C7DE3B8DA2C0067D7B27F4CCC7E96EA4ABAF7EC94AB0E60B161C",
+    "model_b_gray_best": "A1576AA4762E4C369C3E7CE480124E69353E5B0AB18A6E7F79E229CCBD2E20D7",
+    "model_b_polar_best": "96DF542D65B93F456B0C82F943F610A64A993FC45995331706E2EDAE94F14D61",
+    "checkerboard_qa": "98B5DB9878944301A3183267BE9D6039ADEB134596C5063411A095BCDA4CE454",
+    "scene_qa": "C883A40C390FB0F9FE9E71152DF3B507DD88A1F0EB93AAD72A765CA4B7A0D52D",
+    "model_b_ablation": "CFD8968483221E640758FF7C9231DAF0B6C34CAA8E0CEA98FFCAC9699DA81048",
+    "segmentation_test": "85F65D7A5D9E494FE74E055CD5B74AE927781B8BAC21100DA821798C314F0A0D",
+    "pipeline_speed": "2142290C46DA76796588C07DA4F0F0C63504BD587C224AED034DB9B3A34C8E90"
+  },
+  "cleanup": {
+    "archive": "archives/datasets_original_20260912.zip",
+    "archive_verified": true,
+    "legacy_deletion_status": "removed_after_verified_archive",
+    "legacy_data_removed": [
+      "datasets/Rectified",
+      "datasets/bz_JSON"
+    ],
+    "legacy_code_pending": true
+  },
+  "remaining_external_validation": [
+    "Measure depth error against known distances at 0.5, 0.75, 1.0, 1.5 and 2.0 meters.",
+    "Run a continuous 30-minute dual-camera hardware acceptance test.",
+    "Optimize or replace CPU SGBM and export neural models before claiming real-time throughput.",
+    "Collect more mixed-scene and real_fish examples."
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "audit_date": "2026-09-14",
+  "comparison": "current manually edited bz_JSON_v2 shapes versus deterministic migration from archived legacy annotations",
+  "changed_json_files": 83,
+  "changed_shapes": 83,
+  "changed_coordinate_points": 491,
+  "label_changes": 0,
+  "shape_count_delta": 0,
+  "point_count_delta": 4,
+  "point_count_changed_shapes": 3,
+  "coordinate_delta_px": {
+    "median": 38.33,
+    "p95": 102.191,
+    "max": 138.248
+  },
+  "files_by_split": {
+    "train": 80,
+    "val": 1,
+    "test": 2
+  },
+  "changed_shapes_by_label": {
+    "metal_submarine": 62,
+    "plastic_submarine": 6,
+    "plastic_fish": 13,
+    "real_fish": 2
+  },
+  "metadata_normalization": {
+    "json_files_checked": 1125,
+    "files_normalized": 83,
+    "embedded_image_data_removed": 83,
+    "missing_corresponding_images": 0,
+    "post_normalization_changes_remaining": 0
+  },
+  "manual_annotation_archive": {
+    "path": "archives/bz_JSON_v2_manual_20260914.zip",
+    "size_bytes": 66246936,
+    "sha256": "F8B2E7652C0CB1DF8C1C32DFD9FF52A41DB3FE4016C09D35879C77A5F2B42B25"
+  },
+  "detail_csv": {
+    "path": "analysis/data/manual_annotation_changes_20260914.csv",
+    "rows": 83,
+    "sha256": "81A5C5CB8AA3D411FA8E09EFA6CB05EA6C543FBAA520F934867DA4FCF420E70F"
+  },
+  "derived_data_rebuild": {
+    "training_run_started": false,
+    "split_assignment_unchanged": true,
+    "pair_manifest_unchanged": true,
+    "images": 1125,
+    "segmentation_polygons": 2808,
+    "binary_objects": {
+      "train": 2078,
+      "val": 368,
+      "test": 362
+    },
+    "classification_samples_per_variant": 2808,
+    "gray_polar_filename_mismatches": 0,
+    "tree_sha256": {
+      "annotation_json": "2D2D652CA9394B976A82668CD7FC4E888551D242B12AB010DF86FA6E03C05439",
+      "segmentation_labels": "00E92C8F0A8328B8043FA15E47C42A025A5B7D86512EE6F459CB5ABD6FB7C19C",
+      "binary_labels": "3BF00094AFD012DE16C5EA07A999DED179960DD7FD84E5733597AF1FDE60D88D",
+      "gray_classification_images": "24DB9F967572B5958A44C6CD9AEC3DBB0BA9476757F295F7D1F1B474B20A90D2",
+      "polar_classification_images": "923995A95DFDD327CA0570A4392A85F1B23502DAD385C38BC9AEF76F43453D73"
+    }
+  },
+  "post_edit_evaluation": {
+    "models_retrained": false,
+    "weights_unchanged": true,
+    "segmentation_report": "analysis/runs/run_20260913_initial/aliases/segmentation_test_post_manual_20260914.json",
+    "segmentation_report_sha256": "85F65D7A5D9E494FE74E055CD5B74AE927781B8BAC21100DA821798C314F0A0D",
+    "segmentation_report_identical_to_previous": true,
+    "ablation_report": "analysis/runs/run_20260913_initial/aliases/model_b_ablation_test_post_manual_20260914.json",
+    "ablation_report_sha256": "CFD8968483221E640758FF7C9231DAF0B6C34CAA8E0CEA98FFCAC9699DA81048",
+    "ablation_report_identical_to_previous": true
+  }
+}

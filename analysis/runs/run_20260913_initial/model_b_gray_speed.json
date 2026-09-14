@@ -1,0 +1,11 @@
+{
+  "mean_ms": 3.3,
+  "std_ms": 0.29,
+  "min_ms": 2.73,
+  "max_ms": 5.28,
+  "p50_ms": 3.29,
+  "p95_ms": 3.69,
+  "fps": 303.0,
+  "mode": "model",
+  "model": "runs\\train\\model_b-gray\\weights\\best.pt"
+}

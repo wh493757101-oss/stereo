@@ -1,0 +1,36 @@
+# Data and generated artifacts
+datasets/
+/runs/
+archives/*.zip
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Test scratch space
+tests/_tmp*/
+
+# Worker runtime logs
+.agents/skills/claude-worker/runs/*/
+
+# Local agent runtime state
+.claude/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

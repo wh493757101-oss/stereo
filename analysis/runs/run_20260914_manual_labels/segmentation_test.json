@@ -1,0 +1,130 @@
+{
+  "device": "0",
+  "models": {
+    "model_a": {
+      "batch": 8,
+      "checkpoint": "runs/train/run_20260914_manual_labels/model_a/weights/best.pt",
+      "class_names": [
+        "target"
+      ],
+      "counts": {
+        "instances_per_class": {
+          "target": 362
+        }
+      },
+      "data": "datasets/underwater_seg_binary_v2/data.yaml",
+      "device": "0",
+      "imgsz": 640,
+      "n_split_images": 180,
+      "overall": {
+        "box": {
+          "map50": 0.9028338883002758,
+          "map50_95": 0.7909046849099787,
+          "precision": 0.952505981117299,
+          "recall": 0.886422177809737
+        },
+        "mask": {
+          "map50": 0.9167990029169364,
+          "map50_95": 0.7564470183929405,
+          "precision": 0.9758928154134646,
+          "recall": 0.8946178423399347
+        }
+      },
+      "per_class": {
+        "target": {
+          "box": {
+            "map50": 0.9028338883002758,
+            "map50_95": 0.7909046849099787
+          },
+          "mask": {
+            "map50": 0.9167990029169364,
+            "map50_95": 0.7564470183929405
+          }
+        }
+      },
+      "split": "test",
+      "workers": 0
+    },
+    "model_baseline": {
+      "batch": 8,
+      "checkpoint": "runs/train/run_20260914_manual_labels/model_baseline/weights/best.pt",
+      "class_names": [
+        "metal_submarine",
+        "plastic_submarine",
+        "plastic_fish",
+        "real_fish"
+      ],
+      "counts": {
+        "instances_per_class": {
+          "metal_submarine": 46,
+          "plastic_fish": 135,
+          "plastic_submarine": 98,
+          "real_fish": 83
+        }
+      },
+      "data": "datasets/underwater_seg_v2/data.yaml",
+      "device": "0",
+      "imgsz": 640,
+      "n_split_images": 180,
+      "overall": {
+        "box": {
+          "map50": 0.9007149049835296,
+          "map50_95": 0.7518231099952197,
+          "precision": 0.9517531951900037,
+          "recall": 0.8817005120364024
+        },
+        "mask": {
+          "map50": 0.9010962726125916,
+          "map50_95": 0.7111549657656344,
+          "precision": 0.9581112390513139,
+          "recall": 0.8827894064433809
+        }
+      },
+      "per_class": {
+        "metal_submarine": {
+          "box": {
+            "map50": 0.9745652173913044,
+            "map50_95": 0.9063183893662154
+          },
+          "mask": {
+            "map50": 0.975,
+            "map50_95": 0.834933007827637
+          }
+        },
+        "plastic_fish": {
+          "box": {
+            "map50": 0.989251638001638,
+            "map50_95": 0.7470586703918076
+          },
+          "mask": {
+            "map50": 0.989251638001638,
+            "map50_95": 0.7248432459778391
+          }
+        },
+        "plastic_submarine": {
+          "box": {
+            "map50": 0.9453766573502362,
+            "map50_95": 0.8685400490472353
+          },
+          "mask": {
+            "map50": 0.9463766573502363,
+            "map50_95": 0.8035770728597124
+          }
+        },
+        "real_fish": {
+          "box": {
+            "map50": 0.6936661071909397,
+            "map50_95": 0.4853753311756205
+          },
+          "mask": {
+            "map50": 0.693756795098492,
+            "map50_95": 0.4812665363973491
+          }
+        }
+      },
+      "split": "test",
+      "workers": 0
+    }
+  },
+  "split": "test"
+}

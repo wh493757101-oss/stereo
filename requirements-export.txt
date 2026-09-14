@@ -1,0 +1,7 @@
+# Core runtime/training environment.
+-r requirements.txt
+
+# Optional ONNX and TensorRT export dependencies.
+onnx>=1.22,<1.23
+onnxsim>=0.6,<0.7
+tensorrt>=11.1,<11.2
