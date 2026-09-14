@@ -6,12 +6,15 @@ import numpy as np
 import pytest
 
 from core.stereo_matching import (
+    HorizontalBand,
     StereoMatchResult,
     StereoMatcher,
     StereoMatcherConfig,
+    build_horizontal_bands,
     compute_disparity_ncc,
     compute_instance_depths,
     disparity_to_depth,
+    merge_horizontal_bands,
     robust_disparity,
     to_gray_u8,
 )
@@ -468,3 +471,176 @@ def test_robust_disparity_uses_median_not_mean():
 
 def test_robust_disparity_returns_zero_for_empty_values():
     assert robust_disparity(np.array([], dtype=np.float32)) == 0.0
+
+
+class TestHorizontalBands:
+    def test_band_rejects_invalid_rows(self):
+        with pytest.raises(ValueError, match="invalid band rows"):
+            HorizontalBand(5, 5)
+        with pytest.raises(ValueError, match="invalid band rows"):
+            HorizontalBand(-1, 4)
+
+    def test_band_height(self):
+        assert HorizontalBand(3, 10).height == 7
+
+    def test_merge_overlapping_bands(self):
+        merged = merge_horizontal_bands(
+            [HorizontalBand(0, 50), HorizontalBand(40, 100)]
+        )
+        assert merged == [HorizontalBand(0, 100)]
+
+    def test_merge_touching_bands(self):
+        # Adjacent bands (no gap) are merged to avoid double edge effects.
+        merged = merge_horizontal_bands([HorizontalBand(10, 50), HorizontalBand(50, 90)])
+        assert merged == [HorizontalBand(10, 90)]
+
+    def test_merge_disjoint_bands_stay_separate_and_sorted(self):
+        merged = merge_horizontal_bands(
+            [HorizontalBand(60, 100), HorizontalBand(0, 20), HorizontalBand(30, 50)]
+        )
+        assert merged == [
+            HorizontalBand(0, 20),
+            HorizontalBand(30, 50),
+            HorizontalBand(60, 100),
+        ]
+
+    def test_merge_contained_band_is_absorbed(self):
+        merged = merge_horizontal_bands(
+            [HorizontalBand(0, 100), HorizontalBand(10, 20)]
+        )
+        assert merged == [HorizontalBand(0, 100)]
+
+    def test_merge_empty_input(self):
+        assert merge_horizontal_bands([]) == []
+
+    def test_build_bands_expands_bboxes_with_margin(self):
+        bands = build_horizontal_bands(
+            [(100, 100, 200, 180)], image_height=512, vertical_margin=10
+        )
+        assert bands == [HorizontalBand(90, 190)]
+
+    def test_build_bands_clips_to_image(self):
+        bands = build_horizontal_bands(
+            [(0, 0, 64, 100), (0, 500, 64, 512)], image_height=512, vertical_margin=20
+        )
+        assert bands[0].y1 == 0
+        assert bands[-1].y2 == 512
+
+    def test_build_bands_merges_vertical_overlap(self):
+        bands = build_horizontal_bands(
+            [(0, 100, 200, 180), (50, 150, 250, 300)],
+            image_height=512,
+            vertical_margin=10,
+        )
+        assert bands == [HorizontalBand(90, 310)]
+
+    def test_build_bands_ignores_x_extent(self):
+        # Bands always span the full width; only rows matter.
+        left = build_horizontal_bands([(0, 100, 10, 180)], 512, 10)
+        right = build_horizontal_bands([(400, 100, 500, 180)], 512, 10)
+        assert left == right
+
+    def test_build_bands_no_bboxes_gives_no_bands(self):
+        assert build_horizontal_bands([], image_height=512) == []
+
+    def test_build_bands_rejects_malformed_bbox(self):
+        with pytest.raises(ValueError, match="bbox"):
+            build_horizontal_bands([(1, 2, 3)], image_height=512)
+
+
+class TestComputeBands:
+    def test_empty_bands_skip_sgbm(self):
+        left, right = make_textured_pair(512, 256, disparity=128)
+        result = default_matcher().compute_bands(left, right, [])
+
+        assert result.disparity.shape == left.shape
+        assert np.all(result.disparity == 0.0)
+        assert np.all(result.valid == 0)
+        assert result.elapsed_s == 0.0
+        assert result.valid_ratio == 0.0
+
+    def test_rows_outside_bands_are_invalid(self):
+        left, right = make_textured_pair(512, 256, disparity=128)
+        bands = [HorizontalBand(100, 180)]
+        result = default_matcher().compute_bands(left, right, bands)
+
+        assert np.all(result.valid[:100] == 0)
+        assert np.all(result.disparity[:100] == 0.0)
+        assert np.all(result.valid[180:] == 0)
+        assert np.all(result.disparity[180:] == 0.0)
+        inside = result.valid[100:180] > 0
+        assert inside.mean() > 0.3
+        values = result.disparity[100:180][inside]
+        assert np.median(values) == pytest.approx(128, abs=DISPARITY_TOLERANCE_PX)
+
+    def test_valid_ratio_is_over_full_image(self):
+        left, right = make_textured_pair(512, 256, disparity=128)
+        bands = [HorizontalBand(0, 64)]  # quarter of the rows
+        result = default_matcher().compute_bands(left, right, bands)
+
+        expected = float(result.valid.sum()) / (256 * 512)
+        assert result.valid_ratio == pytest.approx(expected)
+        assert result.valid_ratio < 0.25
+
+    def test_bands_are_effectively_disjoint_no_double_coverage(self):
+        # Overlapping input bands must not run SGBM twice on shared rows.
+        left, right = make_textured_pair(512, 256, disparity=128)
+        calls = []
+        original = StereoMatcher._match_pair
+
+        def spy(self, left_img, right_img):
+            calls.append(left_img.shape)
+            return original(self, left_img, right_img)
+
+        import core.stereo_matching as sm
+
+        with unittest.mock.patch.object(sm.StereoMatcher, "_match_pair", spy):
+            result = default_matcher().compute_bands(
+                left, right, [HorizontalBand(0, 100), HorizontalBand(50, 160)]
+            )
+
+        assert len(calls) == 1  # merged into one band before matching
+        assert result.valid_ratio > 0.0
+
+    def test_near_full_coverage_falls_back_to_single_full_pass(self):
+        left, right = make_textured_pair(512, 256, disparity=128)
+        calls = []
+        original = StereoMatcher.compute
+
+        def spy(self, left_img, right_img):
+            calls.append(1)
+            return original(self, left_img, right_img)
+
+        import core.stereo_matching as sm
+
+        with unittest.mock.patch.object(sm.StereoMatcher, "compute", spy):
+            result = default_matcher().compute_bands(
+                left, right, [HorizontalBand(0, 240)]  # 240/256 = 0.94 >= 0.9
+            )
+
+        assert len(calls) == 1
+        valid = result.disparity[result.valid > 0]
+        assert np.median(valid) == pytest.approx(128, abs=DISPARITY_TOLERANCE_PX)
+
+    def test_multiple_disjoint_bands_each_matched(self):
+        left, right = make_textured_pair(512, 256, disparity=128)
+        bands = [HorizontalBand(0, 64), HorizontalBand(192, 256)]
+        result = default_matcher().compute_bands(left, right, bands)
+
+        for y1, y2 in ((0, 64), (192, 256)):
+            inside = result.valid[y1:y2] > 0
+            assert inside.mean() > 0.3
+            values = result.disparity[y1:y2][inside]
+            assert np.median(values) == pytest.approx(
+                128, abs=DISPARITY_TOLERANCE_PX
+            )
+        assert np.all(result.valid[64:192] == 0)
+
+    def test_bands_clipped_to_image_rows(self):
+        left, right = make_textured_pair(512, 256, disparity=128)
+        result = default_matcher().compute_bands(
+            left, right, [HorizontalBand(0, 300), HorizontalBand(100, 999)]
+        )
+        # Merged and clipped: one band covering the whole image -> full pass.
+        valid = result.disparity[result.valid > 0]
+        assert np.median(valid) == pytest.approx(128, abs=DISPARITY_TOLERANCE_PX)

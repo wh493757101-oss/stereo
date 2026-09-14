@@ -9,6 +9,7 @@ derived from that single dense disparity map.
 Assumes rectified inputs (row-aligned epipolar geometry).
 """
 
+import collections.abc
 import dataclasses
 import time
 
@@ -81,6 +82,71 @@ class StereoMatchResult:
 
 
 @dataclasses.dataclass(frozen=True)
+class HorizontalBand:
+    """Full-width horizontal image strip used for band-restricted matching.
+
+    ``y1`` is inclusive, ``y2`` exclusive. Bands always keep the full image
+    width and the full configured disparity range; only rows are restricted.
+    """
+
+    y1: int
+    y2: int
+
+    def __post_init__(self) -> None:
+        if self.y1 < 0 or self.y2 <= self.y1:
+            raise ValueError(f"invalid band rows: y1={self.y1}, y2={self.y2}")
+
+    @property
+    def height(self) -> int:
+        return self.y2 - self.y1
+
+
+def merge_horizontal_bands(
+    bands: "collections.abc.Iterable[HorizontalBand]",
+) -> list[HorizontalBand]:
+    """Merge vertically overlapping (or touching) bands; drop empties.
+
+    Returns bands sorted by ``y1`` that are pairwise disjoint, so no row is
+    ever covered by two bands (which would double-count timing and valid
+    pixels).
+    """
+    cleaned = sorted(
+        (band for band in bands if band.height > 0), key=lambda b: (b.y1, b.y2)
+    )
+    merged: list[HorizontalBand] = []
+    for band in cleaned:
+        if merged and band.y1 <= merged[-1].y2:
+            previous = merged[-1]
+            merged[-1] = HorizontalBand(previous.y1, max(previous.y2, band.y2))
+        else:
+            merged.append(band)
+    return merged
+
+
+def build_horizontal_bands(
+    bboxes,
+    image_height: int,
+    vertical_margin: int = 10,
+) -> list[HorizontalBand]:
+    """Build merged full-width bands from Model A bounding boxes.
+
+    Each bbox (x1, y1, x2, y2) is expanded by ``vertical_margin`` rows, its
+    x extent ignored (bands span the full width), clipped to the image and
+    merged with any band it overlaps vertically.
+    """
+    bands: list[HorizontalBand] = []
+    for bbox in bboxes:
+        coords = [float(v) for v in bbox]
+        if len(coords) != 4:
+            raise ValueError(f"bbox must be (x1, y1, x2, y2), got {bbox!r}")
+        y1 = max(0, int(np.floor(coords[1])) - int(vertical_margin))
+        y2 = min(int(image_height), int(np.ceil(coords[3])) + int(vertical_margin))
+        if y2 > y1:
+            bands.append(HorizontalBand(y1, y2))
+    return merge_horizontal_bands(bands)
+
+
+@dataclasses.dataclass(frozen=True)
 class InstanceDepth:
     """Per-instance disparity/depth statistics with an explicit validity field."""
 
@@ -142,7 +208,6 @@ class StereoMatcher:
         return _num_disparities(self.config.max_disparity, self.config.scale)
 
     def compute(self, left: np.ndarray, right: np.ndarray) -> StereoMatchResult:
-        cfg = self.config
         left_gray = to_gray_u8(left)
         right_gray = to_gray_u8(right)
         if left_gray.shape != right_gray.shape:
@@ -153,20 +218,107 @@ class StereoMatcher:
             raise ValueError(f"expected single-channel image, got shape {left_gray.shape}")
 
         h, w = left_gray.shape
+        disparity, valid, elapsed, valid_ratio = self._match_pair(left_gray, right_gray)
+        if valid_ratio < self.config.min_valid_ratio:
+            disparity = np.zeros((h, w), dtype=np.float32)
+            valid = np.zeros((h, w), dtype=np.uint8)
+
+        return StereoMatchResult(
+            disparity=disparity,
+            valid=valid,
+            elapsed_s=elapsed,
+            valid_ratio=valid_ratio,
+        )
+
+    def compute_bands(
+        self,
+        left: np.ndarray,
+        right: np.ndarray,
+        bands: list[HorizontalBand],
+        full_image_threshold: float = 0.9,
+    ) -> StereoMatchResult:
+        """Band-restricted matching; full-size result, rows outside bands invalid.
+
+        Only the merged band rows are matched (full width and the full
+        configured disparity range inside each band). When the merged bands
+        cover at least ``full_image_threshold`` of the image height, a single
+        full-image :meth:`compute` pass is cheaper and is used instead.
+        """
+        left_gray = to_gray_u8(left)
+        right_gray = to_gray_u8(right)
+        if left_gray.shape != right_gray.shape:
+            raise ValueError(
+                f"left/right shape mismatch: {left_gray.shape} vs {right_gray.shape}"
+            )
+        if left_gray.ndim != 2:
+            raise ValueError(f"expected single-channel image, got shape {left_gray.shape}")
+        if not 0.0 < full_image_threshold <= 1.0:
+            raise ValueError("full_image_threshold must be in (0, 1]")
+
+        h, w = left_gray.shape
+        clipped_bands: list[HorizontalBand] = []
+        for band in bands:
+            y1 = max(0, int(band.y1))
+            y2 = min(h, int(band.y2))
+            if y2 > y1:
+                clipped_bands.append(HorizontalBand(y1, y2))
+        clipped = merge_horizontal_bands(clipped_bands)
+        if not clipped:
+            # No target rows: skip SGBM entirely.
+            return StereoMatchResult(
+                disparity=np.zeros((h, w), dtype=np.float32),
+                valid=np.zeros((h, w), dtype=np.uint8),
+                elapsed_s=0.0,
+                valid_ratio=0.0,
+            )
+
+        coverage = sum(band.height for band in clipped)
+        if coverage >= full_image_threshold * h:
+            return self.compute(left_gray, right_gray)
+
+        disparity = np.zeros((h, w), dtype=np.float32)
+        valid = np.zeros((h, w), dtype=np.uint8)
+        elapsed = 0.0
+        valid_pixels = 0
+        for band in clipped:
+            band_disp, band_valid, band_elapsed, band_ratio = self._match_pair(
+                left_gray[band.y1 : band.y2], right_gray[band.y1 : band.y2]
+            )
+            elapsed += band_elapsed
+            if band_ratio < self.config.min_valid_ratio:
+                continue
+            disparity[band.y1 : band.y2] = band_disp
+            valid[band.y1 : band.y2] = band_valid
+            valid_pixels += int(band_valid.sum())
+
+        return StereoMatchResult(
+            disparity=disparity,
+            valid=valid,
+            elapsed_s=elapsed,
+            valid_ratio=valid_pixels / float(h * w),
+        )
+
+    def _match_pair(
+        self, left_gray: np.ndarray, right_gray: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, float, float]:
+        """Core SGBM pipeline on same-shape grayscale images.
+
+        Returns ``(disparity, valid, elapsed_s, valid_ratio)`` where the maps
+        are at the input resolution and ``valid_ratio`` is measured over the
+        whole (cropped) input. The caller applies ``min_valid_ratio`` policy.
+        """
+        cfg = self.config
+        h, w = left_gray.shape
         sw = max(1, int(round(w * cfg.scale)))
         sh = max(1, int(round(h * cfg.scale)))
         left_small = cv2.resize(left_gray, (sw, sh), interpolation=cv2.INTER_AREA)
         right_small = cv2.resize(right_gray, (sw, sh), interpolation=cv2.INTER_AREA)
 
         num_disp = self.num_disparities
-        empty = np.zeros((h, w), dtype=np.float32)
-        empty_valid = np.zeros((h, w), dtype=np.uint8)
         if min(sw, sh) < cfg.block_size:
             # Scene too small for the configured block size; report no data
             # instead of crashing (matches legacy behaviour on tiny inputs).
-            return StereoMatchResult(
-                disparity=empty, valid=empty_valid, elapsed_s=0.0, valid_ratio=0.0
-            )
+            return np.zeros((h, w), np.float32), np.zeros((h, w), np.uint8), 0.0, 0.0
 
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         left_match = clahe.apply(left_small)
@@ -250,9 +402,6 @@ class StereoMatcher:
         valid_small = consistent
         disp_small = np.where(valid_small, disp_l, 0.0).astype(np.float32)
         valid_ratio = float(valid_small.mean())
-        if valid_ratio < cfg.min_valid_ratio:
-            disp_small = np.zeros_like(disp_small)
-            valid_small = np.zeros_like(valid_small)
 
         disp_full = (
             cv2.resize(disp_small, (w, h), interpolation=cv2.INTER_LINEAR) / cfg.scale
@@ -262,12 +411,7 @@ class StereoMatcher:
         )
         disp_full = np.where(valid_full > 0, disp_full, 0.0).astype(np.float32)
 
-        return StereoMatchResult(
-            disparity=disp_full,
-            valid=valid_full,
-            elapsed_s=elapsed,
-            valid_ratio=valid_ratio,
-        )
+        return disp_full, valid_full, elapsed, valid_ratio
 
     def instance_stats(
         self,
