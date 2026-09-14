@@ -1,0 +1,585 @@
+"""Tests for core.fusion_dataset and scripts.prepare_cls_fusion_dataset."""
+
+import csv
+import json
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.fusion_dataset import (
+    NPZ_FIELDS,
+    QUALITY_VECTOR_KEYS,
+    QUALITY_VECTOR_LENGTH,
+    build_quality_vector,
+    load_fusion_sample,
+    quality_vector_from_result,
+    save_fusion_sample,
+)
+from core.polar_compute import compute_polar_features
+from core.stereo_matching import StereoMatcher, StereoMatcherConfig
+from scripts.prepare_cls_fusion_dataset import (
+    FusionSampleRecord,
+    audit_fusion_dataset,
+    build_fusion_dataset,
+)
+
+
+@pytest.fixture
+def tmp_path() -> Path:
+    """Isolated work dir under the system temp (pytest basetemp under tests/
+    can be locked by another process on Windows)."""
+    workdir = Path(tempfile.mkdtemp(prefix="fusion_dataset_test_"))
+    try:
+        yield workdir
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+class TestQualityVector:
+    def test_key_order_and_length(self):
+        assert QUALITY_VECTOR_KEYS == (
+            "valid_ratio",
+            "in_bounds_ratio",
+            "brightness_valid_ratio",
+            "mean_abs_q",
+        )
+        assert QUALITY_VECTOR_LENGTH == 4
+
+    def test_build_quality_vector_order(self):
+        vector = build_quality_vector(0.5, 0.25, 0.75, 0.1)
+        assert vector.dtype == np.float32
+        np.testing.assert_allclose(vector, [0.5, 0.25, 0.75, 0.1])
+
+    def test_quality_from_result_full_mask(self):
+        left = np.full((4, 8), 100, dtype=np.uint8)
+        right = np.full((4, 8), 60, dtype=np.uint8)
+        disparity = np.full((4, 8), 2.0, dtype=np.float32)
+        mask = np.zeros((4, 8), dtype=np.uint8)
+        mask[1:3, 3:6] = 1
+        result = compute_polar_features(left, right, disparity, object_mask=mask)
+
+        vector, components = quality_vector_from_result(result, mask)
+
+        # Every mask pixel is valid, in bounds and bright; q = 40/160
+        assert components["valid_ratio"] == pytest.approx(1.0)
+        assert components["in_bounds_ratio"] == pytest.approx(1.0)
+        assert components["brightness_valid_ratio"] == pytest.approx(1.0)
+        assert components["mean_abs_q"] == pytest.approx(0.25, abs=1e-5)
+        np.testing.assert_allclose(
+            vector,
+            [1.0, 1.0, 1.0, 0.25],
+            rtol=1e-5,
+        )
+
+    def test_quality_from_result_empty_mask(self):
+        left = np.full((4, 8), 100, dtype=np.uint8)
+        right = np.full((4, 8), 100, dtype=np.uint8)
+        disparity = np.full((4, 8), 2.0, dtype=np.float32)
+        result = compute_polar_features(left, right, disparity)
+        empty = np.zeros((4, 8), dtype=np.uint8)
+
+        vector, components = quality_vector_from_result(result, empty)
+
+        assert all(value == 0.0 for value in components.values())
+        np.testing.assert_array_equal(vector, np.zeros(QUALITY_VECTOR_LENGTH))
+
+
+class TestSaveLoadRoundtrip:
+    def _sample_arrays(self, shape=(6, 8)):
+        rng = np.random.default_rng(0)
+        gray = rng.integers(0, 256, size=shape, dtype=np.uint8)
+        signed = rng.uniform(-1, 1, size=shape).astype(np.float32)
+        abs_q = np.abs(signed)
+        valid = (rng.uniform(size=shape) > 0.5).astype(np.uint8)
+        quality = build_quality_vector(0.5, 0.6, 0.7, 0.2)
+        return gray, signed, abs_q, valid, quality
+
+    def test_roundtrip_preserves_all_fields(self, tmp_path):
+        gray, signed, abs_q, valid, quality = self._sample_arrays()
+        path = tmp_path / "train" / "cls" / "sample.npz"
+        save_fusion_sample(path, gray, signed, abs_q, valid, quality, class_id=2)
+
+        sample = load_fusion_sample(path)
+        np.testing.assert_array_equal(sample.gray, gray)
+        np.testing.assert_array_equal(sample.signed_q, signed)
+        np.testing.assert_array_equal(sample.abs_q, abs_q)
+        np.testing.assert_array_equal(sample.valid, valid)
+        np.testing.assert_array_equal(sample.quality, quality)
+        assert sample.class_id == 2
+
+    def test_saved_fields_are_exactly_the_contract(self, tmp_path):
+        gray, signed, abs_q, valid, quality = self._sample_arrays()
+        path = save_fusion_sample(
+            tmp_path / "s.npz", gray, signed, abs_q, valid, quality, class_id=0
+        )
+        with np.load(path) as data:
+            assert set(data.files) == set(NPZ_FIELDS)
+            assert data["gray"].dtype == np.uint8
+            assert data["signed_q"].dtype == np.float32
+            assert data["abs_q"].dtype == np.float32
+            assert data["valid"].dtype == np.uint8
+            assert data["quality"].dtype == np.float32
+            assert data["class_id"].dtype == np.int64
+            assert data["class_id"].shape == ()
+
+    def test_shape_mismatch_rejected(self, tmp_path):
+        gray, signed, abs_q, valid, quality = self._sample_arrays()
+        with pytest.raises(ValueError, match="signed_q shape"):
+            save_fusion_sample(
+                tmp_path / "s.npz",
+                gray,
+                signed[:, :4],
+                abs_q,
+                valid,
+                quality,
+                class_id=0,
+            )
+
+    def test_bad_quality_shape_rejected(self, tmp_path):
+        gray, signed, abs_q, valid, _ = self._sample_arrays()
+        with pytest.raises(ValueError, match="quality"):
+            save_fusion_sample(
+                tmp_path / "s.npz",
+                gray,
+                signed,
+                abs_q,
+                valid,
+                np.zeros(3, dtype=np.float32),
+                class_id=0,
+            )
+
+    def test_load_rejects_missing_field(self, tmp_path):
+        np.savez(tmp_path / "partial.npz", gray=np.zeros((2, 2), np.uint8))
+        with pytest.raises(ValueError, match="missing fields"):
+            load_fusion_sample(tmp_path / "partial.npz")
+
+    def test_load_rejects_nan(self, tmp_path):
+        gray = np.zeros((2, 2), np.uint8)
+        nan_signed = np.full((2, 2), np.nan, np.float32)
+        save = tmp_path / "nan.npz"
+        np.savez_compressed(
+            save,
+            gray=gray,
+            signed_q=nan_signed,
+            abs_q=np.zeros((2, 2), np.float32),
+            valid=np.zeros((2, 2), np.uint8),
+            quality=np.zeros(QUALITY_VECTOR_LENGTH, np.float32),
+            class_id=np.asarray(0, np.int64),
+        )
+        with pytest.raises(ValueError, match="NaN"):
+            load_fusion_sample(save)
+
+
+def make_textured_pair(width=256, height=128, disparity=32, seed=0):
+    """Small synthetic rectified pair: right(x) = left(x + disparity)."""
+    rng = np.random.default_rng(seed)
+    left = rng.integers(30, 226, size=(height, width), dtype=np.uint8)
+    right = rng.integers(30, 226, size=(height, width), dtype=np.uint8)
+    if disparity > 0:
+        right[:, : width - disparity] = left[:, disparity:]
+    return left, right
+
+
+def polygon_label(class_id, x1, y1, x2, y2, width, height):
+    """YOLO polygon string for an axis-aligned box (normalized coords)."""
+    pts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+    coords = " ".join(f"{x / width:.6f} {y / height:.6f}" for x, y in pts)
+    return f"{class_id} {coords}"
+
+
+@pytest.fixture
+def synthetic_source(tmp_path):
+    """Minimal v2-style source root: 2 pairs (train/val), 1 group each."""
+    import cv2
+
+    source = tmp_path / "seg_v2"
+    images_root = tmp_path / "Rectified_v2"
+    (source / "labels" / "train").mkdir(parents=True)
+    (source / "labels" / "val").mkdir(parents=True)
+    (source / "labels" / "test").mkdir(parents=True)
+
+    pairs = []
+    for stem, split, group, seed in (
+        ("groupA_000", "train", "groupA", 0),
+        ("groupB_000", "val", "groupB", 1),
+    ):
+        left, right = make_textured_pair(seed=seed)
+        pair_dir = images_root / group
+        (pair_dir / "left").mkdir(parents=True, exist_ok=True)
+        (pair_dir / "right").mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(pair_dir / "left" / "000.png"), left)
+        cv2.imwrite(str(pair_dir / "right" / "000.png"), right)
+        # One object per pair; straddles x < disparity so out-of-bounds
+        # right-view samples occur inside the crop (occlusion margin).
+        (source / "labels" / split / f"{stem}.txt").write_text(
+            polygon_label(1, 16, 40, 80, 80, 256, 128), encoding="utf-8"
+        )
+        pairs.append((stem, split, group, pair_dir))
+
+    with (source / "pair_manifest.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["output_stem", "split", "group_name", "left_path", "right_path"])
+        for stem, split, group, pair_dir in pairs:
+            writer.writerow(
+                [
+                    stem,
+                    split,
+                    group,
+                    (pair_dir / "left" / "000.png").as_posix(),
+                    (pair_dir / "right" / "000.png").as_posix(),
+                ]
+            )
+    (source / "data.yaml").write_text(
+        "path: unused\nnames:\n  0: metal_submarine\n  1: plastic_fish\n",
+        encoding="utf-8",
+    )
+    return source
+
+
+def small_matcher():
+    return StereoMatcher(
+        StereoMatcherConfig(
+            max_disparity=64,
+            scale=0.25,
+            block_size=7,
+            speckle_window=50,
+            speckle_range=16,
+        )
+    )
+
+
+class TestBuildFusionDataset:
+    def test_generates_npz_manifest_and_expected_counts(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source,
+            output_root=output,
+            matcher=small_matcher(),
+            crop_pad=5,
+        )
+
+        assert len(records) == 2
+        assert (output / "dataset_manifest.csv").is_file()
+        assert (output / "dataset_summary.json").is_file()
+        sample = load_fusion_sample(output / records[0].npz_path)
+        assert sample.class_id == 1
+        assert sample.gray.shape == sample.abs_q.shape
+        # Crop window: box x[16,80] y[40,80] + pad 5 on each side
+        assert sample.gray.shape == (50, 74)
+
+    def test_manifest_carries_all_provenance(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source,
+            output_root=output,
+            matcher=small_matcher(),
+        )
+
+        with (output / "dataset_manifest.csv").open(encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        assert len(rows) == 2
+        row = rows[0]
+        for field in (
+            "split",
+            "class_name",
+            "group_name",
+            "source_frame",
+            "object_index",
+            "polar_valid_ratio",
+            "stereo_reason",
+        ):
+            assert field in row
+        assert row["class_name"] == "plastic_fish"
+        assert row["source_frame"] == records[0].source_frame
+
+    def test_polar_uses_per_pixel_disparity_with_valid_map(self, tmp_path, synthetic_source):
+        import cv2
+
+        output = tmp_path / "fusion_v3"
+        build_fusion_dataset(
+            source_root=synthetic_source,
+            output_root=output,
+            matcher=small_matcher(),
+        )
+
+        # Rebuild the expected polar from the matcher's own dense result.
+        left = cv2.imread(
+            str(tmp_path / "Rectified_v2" / "groupA" / "left" / "000.png"),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        right = cv2.imread(
+            str(tmp_path / "Rectified_v2" / "groupA" / "right" / "000.png"),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        matcher = small_matcher()
+        result = matcher.compute(left, right)
+        # fillPoly semantics: polygon boundary pixels are inside the mask.
+        mask = np.zeros(left.shape, dtype=np.uint8)
+        mask[40:81, 16:81] = 1
+        expected = compute_polar_features(
+            left, right, result.disparity, object_mask=mask, disparity_valid=result.valid
+        )
+
+        with (output / "dataset_manifest.csv").open(encoding="utf-8") as fh:
+            first_row = next(csv.DictReader(fh))
+        sample = load_fusion_sample(output / first_row["npz_path"])
+
+        # Crop window with default pad 10: box x[16,80] y[40,80] -> x[6,90), y[30,90)
+        y1, y2, x1, x2 = 30, 90, 6, 90
+        np.testing.assert_allclose(
+            sample.abs_q, expected.abs_q[y1:y2, x1:x2], rtol=1e-5
+        )
+        np.testing.assert_array_equal(
+            sample.valid, expected.valid_mask[y1:y2, x1:x2].astype(np.uint8)
+        )
+        # Columns with x < disparity 32 have no right-view correspondence:
+        # they must be invalid with zero differential, never saturated at 1.
+        assert np.all(sample.valid[:, : 32 - x1] == 0)
+        assert np.all(sample.abs_q[:, : 32 - x1] == 0.0)
+        assert np.any(sample.valid[:, 32 - x1 :] > 0)
+
+    def test_invalid_stereo_writes_zeroed_sample_with_reason(self, tmp_path, synthetic_source):
+        class AlwaysInvalidMatcher:
+            def compute(self, left, right):
+                from core.stereo_matching import StereoMatchResult
+
+                return StereoMatchResult(
+                    disparity=np.zeros(left.shape, np.float32),
+                    valid=np.zeros(left.shape, np.uint8),
+                    elapsed_s=0.0,
+                    valid_ratio=0.0,
+                )
+
+            def instance_stats(self, result, mask, instance_id=0):
+                from core.stereo_matching import InstanceDepth
+
+                return InstanceDepth(
+                    instance_id, 0.0, 0.0, None, False, "no_valid_disparity"
+                )
+
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source,
+            output_root=output,
+            matcher=AlwaysInvalidMatcher(),
+        )
+
+        assert all(not r.stereo_valid for r in records)
+        assert all(r.stereo_reason == "no_valid_disparity" for r in records)
+        sample = load_fusion_sample(output / records[0].npz_path)
+        assert np.all(sample.signed_q == 0.0)
+        assert np.all(sample.abs_q == 0.0)
+        assert np.all(sample.valid == 0)
+        np.testing.assert_array_equal(sample.quality, np.zeros(QUALITY_VECTOR_LENGTH))
+        assert np.any(sample.gray > 0)  # gray crop still written
+
+    def test_clean_required_for_existing_output(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v3"
+        build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        with pytest.raises(RuntimeError, match="not empty"):
+            build_fusion_dataset(
+                source_root=synthetic_source,
+                output_root=output,
+                matcher=small_matcher(),
+            )
+        # --clean replaces it
+        records = build_fusion_dataset(
+            source_root=synthetic_source,
+            output_root=output,
+            matcher=small_matcher(),
+            clean=True,
+        )
+        assert len(records) == 2
+
+    def test_output_inside_source_rejected(self, tmp_path, synthetic_source):
+        with pytest.raises(ValueError, match="outside the source"):
+            build_fusion_dataset(
+                source_root=synthetic_source,
+                output_root=synthetic_source / "fusion_v3",
+                matcher=small_matcher(),
+            )
+
+
+class TestAudit:
+    def make_records(self, records_spec):
+        return [
+            FusionSampleRecord(
+                sample_name=f"s{i}",
+                split=split,
+                group_name=group,
+                class_id=class_id,
+                class_name=f"class_{class_id}",
+                source_frame=f"frame_{i}",
+                object_index=i,
+                stereo_valid=True,
+                stereo_reason="ok",
+                stereo_valid_ratio=0.9,
+                disparity=12.0,
+                polar_valid_ratio=0.8,
+                quality=(0.8, 0.9, 0.9, 0.1),
+                npz_path=npz_path,
+            )
+            for i, (split, group, class_id, npz_path) in enumerate(records_spec)
+        ]
+
+    def test_audit_passes_on_consistent_dataset(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=records,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits={"train": 1, "val": 1, "test": 0},
+        )
+
+        assert audit["audit_passed"] is True
+        assert audit["decoded_samples"] == 2
+        assert audit["decode_failures"] == []
+        assert audit["group_split_leakage"] == {}
+        assert audit["counts"] == {"total": 2, "train": 1, "val": 1, "test": 0}
+        audit_file = tmp_path / "audit" / "fusion_v3_audit.json"
+        assert audit_file.is_file()
+        assert json.loads(audit_file.read_text(encoding="utf-8"))["audit_passed"] is True
+        previews = list((tmp_path / "audit" / "fusion_v3_preview").glob("*_preview.png"))
+        assert len(previews) == 2  # PREVIEW_PER_CLASS=2 per class, 1 sample here
+
+    def test_audit_flags_group_leakage(self, tmp_path):
+        records = self.make_records(
+            [
+                ("train", "groupA", 0, "train/class_0/s0.npz"),
+                ("val", "groupA", 0, "val/class_0/s1.npz"),
+            ]
+        )
+        # npz files do not exist -> decode failures; leakage still reported
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["group_split_leakage"] == {"groupA": ["train", "val"]}
+        assert audit["audit_passed"] is False
+
+    def test_audit_flags_count_mismatch(self, tmp_path):
+        records = self.make_records([("train", "g", 0, "x.npz")])
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits={"train": 5, "val": 0, "test": 0},
+        )
+        assert audit["count_match_expected"] is False
+        assert audit["audit_passed"] is False
+
+    def test_audit_flags_saturated_invalid_pixels(self, tmp_path):
+        # Hand-craft a sample whose invalid pixels carry nonzero abs_q.
+        gray = np.full((4, 4), 100, np.uint8)
+        bad_abs = np.full((4, 4), 1.0, np.float32)  # saturated everywhere
+        save_fusion_sample(
+            tmp_path / "bad.npz",
+            gray=gray,
+            signed_q=bad_abs.copy(),
+            abs_q=bad_abs,
+            valid=np.zeros((4, 4), np.uint8),
+            quality=build_quality_vector(0, 0, 0, 0),
+            class_id=0,
+        )
+        records = self.make_records([("train", "g", 0, "bad.npz")])
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["invalid_pixel_nonzero_failures"] == ["bad.npz"]
+        assert audit["audit_passed"] is False
+
+    def test_audit_flags_saturated_left_band(self, tmp_path):
+        gray = np.full((4, 8), 100, np.uint8)
+        abs_q = np.zeros((4, 8), np.float32)
+        abs_q[:, 0] = 1.0  # full saturated column at the left edge
+        save_fusion_sample(
+            tmp_path / "bad.npz",
+            gray=gray,
+            signed_q=abs_q.copy(),
+            abs_q=abs_q,
+            valid=np.ones((4, 8), np.uint8),
+            quality=build_quality_vector(1, 1, 1, 1),
+            class_id=0,
+        )
+        records = self.make_records([("train", "g", 0, "bad.npz")])
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["saturated_left_band_failures"] == ["bad.npz"]
+        assert audit["audit_passed"] is False
+
+    def test_audit_tolerates_scattered_saturated_pixels(self, tmp_path):
+        # Physically real extreme ratios (single pixels) are not the
+        # out-of-bounds band signature and must not fail the audit.
+        gray = np.full((4, 8), 100, np.uint8)
+        abs_q = np.zeros((4, 8), np.float32)
+        abs_q[1, 5] = 1.0  # isolated saturated valid pixel, not a column band
+        save_fusion_sample(
+            tmp_path / "ok.npz",
+            gray=gray,
+            signed_q=abs_q.copy(),
+            abs_q=abs_q,
+            valid=np.ones((4, 8), np.uint8),
+            quality=build_quality_vector(1, 1, 1, 1),
+            class_id=0,
+        )
+        records = self.make_records([("train", "g", 0, "ok.npz")])
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["saturated_left_band_failures"] == []
+        assert audit["saturated_valid_pixels"] == 1
+        assert audit["audit_passed"] is True
+
+    def test_records_roundtrip_through_manifest(self, tmp_path, synthetic_source):
+        from scripts.prepare_cls_fusion_dataset import records_from_manifest
+
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        rebuilt = records_from_manifest(output)
+        assert len(rebuilt) == len(records)
+        for original, again in zip(records, rebuilt):
+            # The manifest stores 6-decimal text, so compare with tolerance.
+            assert original.sample_name == again.sample_name
+            assert original.split == again.split
+            assert original.npz_path == again.npz_path
+            assert original.stereo_valid == again.stereo_valid
+            assert original.stereo_reason == again.stereo_reason
+            assert original.disparity == pytest.approx(again.disparity, abs=1e-4)
+            assert original.polar_valid_ratio == pytest.approx(
+                again.polar_valid_ratio, abs=1e-6
+            )
+            for a, b in zip(original.quality, again.quality):
+                assert a == pytest.approx(b, abs=1e-6)
