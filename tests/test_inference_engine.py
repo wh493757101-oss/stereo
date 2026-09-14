@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import torch
 
-from core.polar_compute import compute_polar_feature
+from core.polar_compute import compute_polar_features
 from core.stereo_matching import InstanceDepth, StereoMatchResult
 from models.classification import ClassificationResult
 from models.segmentation import Instance
@@ -98,6 +98,26 @@ class FakeClassifier:
         )
 
 
+class FakeBatchClassifier:
+    """Model B with predict_batch; used to verify one batched call."""
+
+    def __init__(self, n_classes=4):
+        self.batch_calls = []
+        self.n_classes = n_classes
+
+    def predict_batch(self, images):
+        self.batch_calls.append(list(images))
+        return [
+            ClassificationResult(
+                top1_id=i % self.n_classes,
+                top1_name=f"material_{i % self.n_classes}",
+                top1_conf=0.5 + 0.1 * (i % 3),
+                probs_available=True,
+            )
+            for i in range(len(images))
+        ]
+
+
 class NamelessFakeClassifier(FakeClassifier):
     def predict(self, image):
         self.calls.append(image)
@@ -125,10 +145,15 @@ class FakeMatcher:
             valid_ratio=0.8 if valid else 0.0,
         )
         self.compute_calls = []
+        self.compute_bands_calls = []
         self.stats_calls = []
 
     def compute(self, left, right):
         self.compute_calls.append((left, right))
+        return self.result
+
+    def compute_bands(self, left, right, bands):
+        self.compute_bands_calls.append((left, right, list(bands)))
         return self.result
 
     def instance_stats(self, result, mask, instance_id=0):
@@ -229,18 +254,30 @@ class TestNoInstanceShortCircuit:
 
 
 class TestSingleDenseComputation:
-    def test_one_compute_reused_for_all_instances(self):
+    def test_one_band_compute_reused_for_all_instances(self):
         engine, kwargs = make_engine()
         two = [make_instance(0), make_instance(1, seed=9)]
         kwargs["model_a"].instances = two
 
         _, depths, _ = engine.process_frame(make_gray(8), make_gray(10))
 
-        assert len(kwargs["matcher"].compute_calls) == 1
+        assert len(kwargs["matcher"].compute_bands_calls) == 1
+        assert kwargs["matcher"].compute_calls == []
         assert kwargs["matcher"].stats_calls == [0, 1]
         assert [d["instance_id"] for d in depths] == [0, 1]
         assert all(d["valid"] for d in depths)
         assert all(d["depth"] is not None and d["depth"] > 0 for d in depths)
+
+    def test_bands_built_from_instance_bboxes_with_margin(self):
+        engine, kwargs = make_engine(band_vertical_margin=5)
+        kwargs["model_a"].instances = [make_instance(0)]
+        engine.process_frame(make_gray(8), make_gray(10))
+
+        _, _, bands = kwargs["matcher"].compute_bands_calls[0]
+        # bbox rows [10, 30) + margin 5 -> band rows [5, 35)
+        assert len(bands) == 1
+        assert bands[0].y1 == 5
+        assert bands[0].y2 == 35
 
     def test_one_polar_compute_reused_for_all_valid_instances(self, monkeypatch):
         first = make_instance(0)
@@ -261,25 +298,72 @@ class TestSingleDenseComputation:
         left, right = make_gray(80), make_gray(81)
         calls = []
 
-        def recording_compute(left_gray, right_gray, disparity, mask=None):
-            calls.append((disparity.copy(), mask.copy()))
-            return compute_polar_feature(left_gray, right_gray, disparity, mask=mask)
+        def recording_compute(left_gray, right_gray, disparity, **kw):
+            calls.append(
+                (
+                    disparity.copy(),
+                    kw.get("object_mask").copy(),
+                    kw.get("disparity_valid").copy(),
+                )
+            )
+            return compute_polar_features(
+                left_gray, right_gray, disparity, **kw
+            )
 
-        monkeypatch.setattr(engine_module, "compute_polar_feature", recording_compute)
+        monkeypatch.setattr(engine_module, "compute_polar_features", recording_compute)
 
         _, depths, polar = engine.process_frame(left, right)
 
         assert len(depths) == 2
         assert len(calls) == 1
+        matcher = kwargs["matcher"]
         combined_mask = (first.mask > 0) | (second.mask > 0)
-        expected_disparity = np.zeros((HEIGHT, WIDTH), dtype=np.float32)
-        expected_disparity[combined_mask] = kwargs["matcher"].stats.disparity
-        np.testing.assert_array_equal(calls[0][0], expected_disparity)
+        np.testing.assert_array_equal(calls[0][0], matcher.result.disparity)
         np.testing.assert_array_equal(calls[0][1], combined_mask)
-        expected = compute_polar_feature(
-            left, right, expected_disparity, mask=combined_mask
+        np.testing.assert_array_equal(calls[0][2], matcher.result.valid)
+        expected = compute_polar_features(
+            left,
+            right,
+            matcher.result.disparity,
+            object_mask=combined_mask,
+            disparity_valid=matcher.result.valid,
         )
-        np.testing.assert_allclose(polar, expected)
+        np.testing.assert_allclose(polar, expected.abs_q)
+
+    def test_polar_uses_per_pixel_disparity_not_constant_fill(self):
+        """Pixels whose disparity failed consistency must get polar 0 even
+        inside a valid instance: no constant object disparity fill."""
+
+        class HalfValidMatcher(FakeMatcher):
+            def __init__(self):
+                super().__init__(valid=True, disparity=12.0)
+                # Right half of the frame has unreliable disparity.
+                self.result.valid[:, WIDTH // 2 :] = 0
+                self.result.disparity[:, WIDTH // 2 :] = 0.0
+
+        engine, kwargs = make_engine(
+            model_a=FakeSegmenter(instances=[make_instance()]),
+            model_b=None,
+            matcher=HalfValidMatcher(),
+        )
+        left, right = make_gray(90), make_gray(91)
+        _, depths, polar = engine.process_frame(left, right)
+
+        assert depths[0]["valid"] is True  # stats still valid (fake)
+        instance_mask = make_instance().mask > 0
+        left_part = instance_mask.copy()
+        left_part[:, WIDTH // 2 :] = False
+        right_part = instance_mask.copy()
+        right_part[:, : WIDTH // 2] = False
+        # Left half: per-pixel disparity 12, all-valid -> real measurements
+        assert polar[left_part].max() > 0.0
+        # Right half: disparity invalid -> zero polar (gate closed)
+        np.testing.assert_array_equal(polar[right_part], 0.0)
+        # Per-instance quality reflects the masked-out half (~0.6 expected;
+        # a few dark pixels may also be brightness-invalid)
+        quality = engine.process_frame_detailed(left, right).polar_quality[0]
+        assert 0.4 < quality["valid_ratio"] < 0.7
+        assert quality["reason"] == "ok"
 
     def test_depth_record_fields(self):
         engine, _ = make_engine()
@@ -345,11 +429,16 @@ class TestModelBInputMode:
         crop = kwargs["model_b"].calls[0]
         assert crop.shape == (40, 40, 3)
         gray_crop = left[self.CROP]
-        object_disp = np.zeros((HEIGHT, WIDTH), dtype=np.float32)
-        object_disp[make_instance().mask > 0] = 12.0
-        polar = compute_polar_feature(left, right, object_disp, mask=make_instance().mask)
+        matcher = kwargs["matcher"]
+        polar = compute_polar_features(
+            left,
+            right,
+            matcher.result.disparity,
+            object_mask=make_instance().mask,
+            disparity_valid=matcher.result.valid,
+        )
         expected_polar_u8 = np.rint(
-            np.clip(polar[self.CROP], 0.0, 1.0) * 255
+            np.clip(polar.abs_q[self.CROP], 0.0, 1.0) * 255
         ).astype(np.uint8)
 
         np.testing.assert_array_equal(crop[:, :, 0], gray_crop)
@@ -373,7 +462,7 @@ class TestModelBInputMode:
         assert depths[0]["valid"] is True and depths[0]["depth"] > 0
         assert polar.shape == (HEIGHT, WIDTH)
         assert np.any(polar > 0)
-        assert len(kwargs["matcher"].compute_calls) == 1
+        assert len(kwargs["matcher"].compute_bands_calls) == 1
 
 
 class TestInvalidStereo:
@@ -421,6 +510,7 @@ class TestSyncSkew:
         )
 
         assert kwargs["matcher"].compute_calls == []
+        assert kwargs["matcher"].compute_bands_calls == []
         assert len(depths) == 1
         assert depths[0]["valid"] is False
         assert depths[0]["depth"] is None
@@ -433,7 +523,7 @@ class TestSyncSkew:
     def test_within_skew_runs_stereo(self):
         engine, kwargs = make_engine()
         engine.process_frame(make_gray(21), make_gray(22), sync_skew_ms=1.0)
-        assert len(kwargs["matcher"].compute_calls) == 1
+        assert len(kwargs["matcher"].compute_bands_calls) == 1
 
     def test_negative_skew_is_normalized_to_absolute(self):
         engine, kwargs = make_engine(max_sync_skew_ms=0.5)
@@ -719,7 +809,7 @@ class TestDetailedSyncSkewSemantics:
         assert result.sync_skew_ms is None
         # Unavailable skew is processed (stereo runs) but is distinguishable
         # from a measured zero.
-        assert len(kwargs["matcher"].compute_calls) == 1
+        assert len(kwargs["matcher"].compute_bands_calls) == 1
 
     def test_measured_zero_echoed_as_zero(self):
         engine, _ = make_engine()
@@ -735,6 +825,182 @@ class TestDetailedSyncSkewSemantics:
         )
         assert result.sync_skew_ms == 5.0
         assert result.depths[0]["reason"] == "sync_skew_exceeded"
+
+
+class TestModelBBatching:
+    def _multi_instance_engine(self, model_b, n=3):
+        instances = []
+        for i in range(n):
+            mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+            mask[5 + i * 12 : 25 + i * 12, 10 + i * 14 : 30 + i * 14] = 255
+            instances.append(
+                Instance(
+                    id=i,
+                    bbox=(10 + i * 14, 5 + i * 12, 30 + i * 14, 25 + i * 12),
+                    mask=mask,
+                    confidence=0.8,
+                    class_id=0,
+                    class_name="object",
+                )
+            )
+        return make_engine(
+            model_a=FakeSegmenter(instances=instances), model_b=model_b
+        )
+
+    def test_predict_batch_used_with_single_call_for_multiple_targets(self):
+        batch = FakeBatchClassifier()
+        engine, _ = self._multi_instance_engine(batch, n=3)
+        instances, _, _ = engine.process_frame(make_gray(76), make_gray(77))
+
+        assert len(batch.batch_calls) == 1
+        assert len(batch.batch_calls[0]) == 3
+        assert [inst.class_id for inst in instances] == [0, 1, 2]
+        assert [inst.class_name for inst in instances] == [
+            "material_0",
+            "material_1",
+            "material_2",
+        ]
+
+    def test_predict_batch_used_with_five_targets(self):
+        batch = FakeBatchClassifier()
+        engine, _ = self._multi_instance_engine(batch, n=5)
+        instances, _, _ = engine.process_frame(make_gray(78), make_gray(79))
+
+        assert len(batch.batch_calls) == 1
+        assert len(batch.batch_calls[0]) == 5
+        assert len(instances) == 5
+
+    def test_legacy_predict_fallback_without_predict_batch(self):
+        class LegacyClassifier:
+            def __init__(self):
+                self.calls = []
+
+            def predict(self, image):
+                self.calls.append(image)
+                return ClassificationResult(
+                    top1_id=2,
+                    top1_name="plastic",
+                    top1_conf=0.66,
+                    probs_available=True,
+                )
+
+        legacy = LegacyClassifier()
+        engine, _ = self._multi_instance_engine(legacy, n=3)
+        instances, _, _ = engine.process_frame(make_gray(82), make_gray(83))
+
+        assert len(legacy.calls) == 3
+        assert all(inst.class_name == "plastic" for inst in instances)
+
+    def test_gray_mode_batches_identical_gray_crops(self):
+        batch = FakeBatchClassifier()
+        left = make_gray(84)
+        engine, _ = self._multi_instance_engine(batch, n=2)
+        engine.model_b_input_mode = "gray"
+        engine.process_frame(left, make_gray(85))
+
+        crops = batch.batch_calls[0]
+        for crop in crops:
+            np.testing.assert_array_equal(crop[:, :, 0], crop[:, :, 1])
+            np.testing.assert_array_equal(crop[:, :, 0], crop[:, :, 2])
+
+    def test_invalid_crop_skipped_in_batch(self):
+        batch = FakeBatchClassifier()
+        # bbox far outside the image -> empty crop -> not sent to the batch
+        outside = Instance(
+            id=0,
+            bbox=(-100, -100, -60, -60),
+            mask=np.zeros((HEIGHT, WIDTH), dtype=np.uint8),
+            confidence=0.9,
+            class_id=0,
+            class_name="object",
+        )
+        engine, _ = make_engine(
+            model_a=FakeSegmenter(instances=[outside, make_instance(1)]),
+            model_b=batch,
+        )
+        instances, _, _ = engine.process_frame(make_gray(86), make_gray(87))
+
+        assert len(batch.batch_calls[0]) == 1  # only the valid crop
+        assert instances[0].class_name == "object"  # untouched
+        assert instances[1].class_name == "material_0"
+
+
+class TestPolarQuality:
+    def test_quality_record_fields(self):
+        engine, _ = make_engine()
+        result = engine.process_frame_detailed(make_gray(88), make_gray(89))
+        assert len(result.polar_quality) == 1
+        record = result.polar_quality[0]
+        assert set(record) == {
+            "instance_id",
+            "valid_ratio",
+            "in_bounds_ratio",
+            "brightness_valid_ratio",
+            "reason",
+        }
+        assert record["instance_id"] == 0
+        assert record["reason"] == "ok"
+        assert 0.0 <= record["valid_ratio"] <= 1.0
+
+    def test_invalid_stereo_gives_zero_quality(self):
+        engine, _ = make_engine(matcher=FakeMatcher(valid=False))
+        result = engine.process_frame_detailed(make_gray(92), make_gray(93))
+        record = result.polar_quality[0]
+        assert record["valid_ratio"] == 0.0
+        assert record["in_bounds_ratio"] == 0.0
+        assert record["brightness_valid_ratio"] == 0.0
+        assert record["reason"] == "no_valid_disparity"
+
+    def test_exceeded_skew_gives_zero_quality(self):
+        engine, _ = make_engine()
+        result = engine.process_frame_detailed(
+            make_gray(94), make_gray(95), sync_skew_ms=9.0
+        )
+        record = result.polar_quality[0]
+        assert record["valid_ratio"] == 0.0
+        assert record["reason"] == "sync_skew_exceeded"
+
+    def test_low_valid_ratio_gives_zero_quality(self):
+        low_ratio_stats = InstanceDepth(0, 12.0, 0.02, None, False, "low_valid_ratio")
+
+        class LowRatioMatcher(FakeMatcher):
+            def instance_stats(self, result, mask, instance_id=0):
+                self.stats_calls.append(instance_id)
+                import dataclasses
+
+                return dataclasses.replace(low_ratio_stats, instance_id=instance_id)
+
+        engine, _ = make_engine(matcher=LowRatioMatcher())
+        result = engine.process_frame_detailed(make_gray(96), make_gray(97))
+        record = result.polar_quality[0]
+        assert record["valid_ratio"] == 0.0
+        assert record["reason"] == "low_valid_ratio"
+
+
+class TestStageTimings:
+    def test_timings_present_and_non_negative(self):
+        engine, _ = make_engine()
+        result = engine.process_frame_detailed(make_gray(98), make_gray(99))
+
+        for key in ("model_a_s", "stereo_s", "depth_s", "polar_s", "model_b_s", "total_s"):
+            assert key in result.timings, f"missing {key}"
+            assert result.timings[key] >= 0.0
+
+    def test_no_instances_short_circuit_has_model_a_timing_only(self):
+        engine, _ = make_engine(model_a=FakeSegmenter())
+        result = engine.process_frame_detailed(make_gray(100), make_gray(101))
+        assert "model_a_s" in result.timings
+        assert "stereo_s" not in result.timings
+        assert "model_b_s" not in result.timings
+
+    def test_exceeded_skip_still_times_model_b(self):
+        engine, _ = make_engine()
+        result = engine.process_frame_detailed(
+            make_gray(102), make_gray(103), sync_skew_ms=9.0
+        )
+        assert "model_a_s" in result.timings
+        assert "model_b_s" in result.timings
+        assert "stereo_s" not in result.timings
 
 
 class TestAlreadyRectified:

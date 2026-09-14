@@ -2,23 +2,28 @@
 Dual-stage inference engine.
 
 Stage 1: YOLO-A (standard 3ch grayscale copy) -> instance masks + bboxes
-Stage 2: one dense SGBM computation per synchronized rectified frame ->
-         robust per-instance disparity -> polar feature computed from the
-         original rectified intensities, only inside each instance mask
-Stage 3: YOLO-B classification -> material class. The crop channels
-         depend on ``model_b_input_mode``: ``"polar"`` classifies
-         [gray, polar, gray]; ``"gray"`` classifies [gray, gray, gray].
+Stage 2: one band-restricted dense SGBM computation per synchronized
+         rectified frame (bands merged from the Model A bboxes) ->
+         robust per-instance median disparity for depth, plus reliable
+         per-pixel disparity for the polarization differential computed
+         from the original rectified intensities
+Stage 3: YOLO-B classification (batched when supported) -> material class.
+         The crop channels depend on ``model_b_input_mode``: ``"polar"``
+         classifies [gray, polar, gray]; ``"gray"`` classifies
+         [gray, gray, gray].
 
 The engine is configuration-driven (see ``configs/default.yaml``) and
 supports dependency injection of Model A, Model B, the stereo matcher and
 the rectifier so it can be exercised without weights or a display.
 
-Outputs instance segmentation + material class + depth.
+Outputs instance segmentation + material class + depth, per-stage timings
+and per-instance polarization quality.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -27,11 +32,16 @@ import numpy as np
 import torch
 import yaml
 
-from core.polar_compute import build_polar_yolo_image, compute_polar_feature
+from core.polar_compute import (
+    PolarFeatureResult,
+    build_polar_yolo_image,
+    compute_polar_features,
+)
 from core.rectification import StereoRectifier
 from core.stereo_matching import (
     StereoMatcher,
     StereoMatcherConfig,
+    build_horizontal_bands,
     disparity_to_depth,
     to_gray_u8,
 )
@@ -46,6 +56,15 @@ DEFAULT_FOCAL_PX = 3643.5231322766995
 
 MODEL_B_INPUT_MODES = ("gray", "polar")
 
+STAGE_TIMING_KEYS = (
+    "model_a_s",
+    "stereo_s",
+    "depth_s",
+    "polar_s",
+    "model_b_s",
+    "total_s",
+)
+
 
 @dataclasses.dataclass
 class DetailedInferenceResult:
@@ -55,6 +74,16 @@ class DetailedInferenceResult:
     rectified) images actually used for matching; overlays must be drawn on
     these, not on the raw camera frames. ``sync_skew_ms`` echoes the input:
     None means no skew measurement was available.
+
+    ``timings`` holds per-stage wall-clock seconds (keys in
+    ``STAGE_TIMING_KEYS``; absent stages are simply not present). They are
+    measured diagnostics, not a throughput claim.
+
+    ``polar_quality`` carries one record per detected instance with the
+    in-mask polarization validity ratios; ``valid_ratio`` is the fraction of
+    instance pixels with a trustworthy polarization measurement (the "polar
+    gate": 0 whenever sync was exceeded, matching failed or too few pixels
+    were valid).
     """
 
     left_gray: np.ndarray
@@ -64,6 +93,8 @@ class DetailedInferenceResult:
     polar_map: np.ndarray | None = None
     sync_skew_ms: float | None = None
     already_rectified: bool = False
+    timings: dict[str, float] = dataclasses.field(default_factory=dict)
+    polar_quality: list[dict] = dataclasses.field(default_factory=list)
 
 
 def resolve_device(requested: str = "auto") -> str:
@@ -134,6 +165,7 @@ class DualStageInferenceEngine:
         stereo_config: StereoMatcherConfig | None = None,
         crop_padding: int = 10,
         max_sync_skew_ms: float = 2.0,
+        band_vertical_margin: int = 20,
         model_b_imgsz: int | None = None,
         model_b_input_mode: str = "polar",
         model_a_iou_threshold: float = 0.45,
@@ -160,10 +192,13 @@ class DualStageInferenceEngine:
         self.focal_length = float(focal_length)
         self.crop_padding = int(crop_padding)
         self.max_sync_skew_ms = float(max_sync_skew_ms)
+        self.band_vertical_margin = int(band_vertical_margin)
         if self.crop_padding < 0:
             raise ValueError("crop_padding must be non-negative")
         if self.max_sync_skew_ms < 0:
             raise ValueError("max_sync_skew_ms must be non-negative")
+        if self.band_vertical_margin < 0:
+            raise ValueError("band_vertical_margin must be non-negative")
 
         stereo_cfg = stereo_config or StereoMatcherConfig()
         if max_disp is not None or window_size is not None:
@@ -263,6 +298,7 @@ class DualStageInferenceEngine:
             stereo_config=stereo_config,
             crop_padding=int(runtime_cfg.get("crop_padding", 10)),
             max_sync_skew_ms=float(runtime_cfg.get("sync_skew_ms", 2.0)),
+            band_vertical_margin=int(stereo_cfg.get("band_margin", 20)),
             model_b_imgsz=model_b_cfg.get("imgsz"),
             model_b_input_mode=str(model_b_cfg.get("input_mode", "polar")),
         )
@@ -314,19 +350,31 @@ class DualStageInferenceEngine:
     ) -> "DetailedInferenceResult":
         """Like :meth:`process_frame` but returns the full intermediate state.
 
+        Pipeline: Model A -> merged horizontal bands -> band-restricted dense
+        matching -> robust per-instance median disparity (depth) -> reliable
+        per-pixel disparity (polar) -> Model B batch classification.
+
         The result carries the normalized (and, when enabled, rectified)
         left/right grayscale images actually used for matching, so the GUI
         can draw instances on the same geometry the depth was computed in.
         ``sync_skew_ms`` echoes the input, preserving the None-means-
         unavailable distinction.
         """
+        frame_started = time.perf_counter()
         left_gray = to_gray_u8(left)
         right_gray = to_gray_u8(right)
         if self.rectify_enabled and not already_rectified:
             left_gray, right_gray = self.rectifier.rectify(left_gray, right_gray)
 
-        instances = self.model_a.predict(_gray_bgr_copy(left_gray), **_predict_kwargs(self.model_a_imgsz))
+        timings: dict[str, float] = {}
+
+        started = time.perf_counter()
+        instances = self.model_a.predict(
+            _gray_bgr_copy(left_gray), **_predict_kwargs(self.model_a_imgsz)
+        )
+        timings["model_a_s"] = time.perf_counter() - started
         if not instances:
+            timings["total_s"] = time.perf_counter() - frame_started
             return DetailedInferenceResult(
                 left_gray=left_gray,
                 right_gray=right_gray,
@@ -335,6 +383,7 @@ class DualStageInferenceEngine:
                 polar_map=None,
                 sync_skew_ms=sync_skew_ms,
                 already_rectified=bool(already_rectified),
+                timings=timings,
             )
 
         polar_map = np.zeros(left_gray.shape, dtype=np.float32)
@@ -344,8 +393,15 @@ class DualStageInferenceEngine:
             depth_results = [
                 _invalid_depth(inst.id, "sync_skew_exceeded") for inst in instances
             ]
+            polar_quality = [
+                _polar_quality_record(inst.id, reason="sync_skew_exceeded")
+                for inst in instances
+            ]
             if self.model_b is not None:
+                started = time.perf_counter()
                 instances = self._classify(instances, left_gray, polar_map)
+                timings["model_b_s"] = time.perf_counter() - started
+            timings["total_s"] = time.perf_counter() - frame_started
             return DetailedInferenceResult(
                 left_gray=left_gray,
                 right_gray=right_gray,
@@ -354,18 +410,33 @@ class DualStageInferenceEngine:
                 polar_map=polar_map,
                 sync_skew_ms=sync_skew_ms,
                 already_rectified=bool(already_rectified),
+                timings=timings,
+                polar_quality=polar_quality,
             )
 
-        # One dense computation per frame; every instance reuses the result.
-        stereo_result = self.matcher.compute(left_gray, right_gray)
+        # One band-restricted dense computation per frame; every instance
+        # reuses the result. Bands come from the Model A bboxes.
+        started = time.perf_counter()
+        bands = build_horizontal_bands(
+            (inst.bbox for inst in instances),
+            image_height=left_gray.shape[0],
+            vertical_margin=self.band_vertical_margin,
+        )
+        if hasattr(self.matcher, "compute_bands"):
+            stereo_result = self.matcher.compute_bands(left_gray, right_gray, bands)
+        else:
+            stereo_result = self.matcher.compute(left_gray, right_gray)
+        timings["stereo_s"] = time.perf_counter() - started
 
+        started = time.perf_counter()
         depth_results = []
-        object_disparity = np.zeros(left_gray.shape, dtype=np.float32)
         polar_mask = np.zeros(left_gray.shape, dtype=bool)
+        stats_by_id: dict[int, Any] = {}
         for inst in instances:
             stats = self.matcher.instance_stats(
                 stereo_result, inst.mask, instance_id=inst.id
             )
+            stats_by_id[inst.id] = stats
             # Only a fully valid stats record may produce a depth value or a
             # nonzero polar contribution (low_valid_ratio is invalid, matching
             # the generated training data).
@@ -390,26 +461,36 @@ class DualStageInferenceEngine:
             )
 
             if stats.valid:
-                # Same robust object disparity drives both the reported depth
-                # and the polar warp. Build one piecewise-constant disparity
-                # image so the full-frame remap runs once regardless of how
-                # many instances were detected. Later instances retain the
-                # previous overlap behavior by overwriting earlier values.
-                mask_bool = inst.mask > 0
-                object_disparity[mask_bool] = stats.disparity
-                polar_mask |= mask_bool
+                polar_mask |= inst.mask > 0
+        timings["depth_s"] = time.perf_counter() - started
 
+        # Polar uses the reliable per-pixel disparity, not a constant
+        # object-level fill: pixels whose disparity failed the matcher's
+        # left-right consistency (or fall outside the image) get no
+        # polarization value instead of a pseudo-correspondence.
+        started = time.perf_counter()
+        polar_result: PolarFeatureResult | None = None
         if np.any(polar_mask):
-            polar_map = compute_polar_feature(
+            polar_result = compute_polar_features(
                 left_gray,
                 right_gray,
-                object_disparity,
-                mask=polar_mask,
+                stereo_result.disparity,
+                object_mask=polar_mask,
+                disparity_valid=stereo_result.valid,
             )
+            polar_map = polar_result.abs_q
+        polar_quality = [
+            _instance_polar_quality(inst, polar_result, stats_by_id[inst.id].reason)
+            for inst in instances
+        ]
+        timings["polar_s"] = time.perf_counter() - started
 
         if self.model_b is not None:
+            started = time.perf_counter()
             instances = self._classify(instances, left_gray, polar_map)
+            timings["model_b_s"] = time.perf_counter() - started
 
+        timings["total_s"] = time.perf_counter() - frame_started
         return DetailedInferenceResult(
             left_gray=left_gray,
             right_gray=right_gray,
@@ -418,6 +499,8 @@ class DualStageInferenceEngine:
             polar_map=polar_map,
             sync_skew_ms=sync_skew_ms,
             already_rectified=bool(already_rectified),
+            timings=timings,
+            polar_quality=polar_quality,
         )
 
     def _classify(
@@ -430,10 +513,12 @@ class DualStageInferenceEngine:
 
         ``polar`` mode classifies [gray, polar, gray]; ``gray`` mode
         classifies [gray, gray, gray]. Crop geometry is identical in both
-        modes.
+        modes. When the injected Model B exposes ``predict_batch`` all crops
+        are classified in one call; otherwise the legacy per-crop interface
+        is used.
         """
-        updated = []
         height, width = left_gray.shape
+        crops: list[np.ndarray | None] = []
         for inst in instances:
             x1, y1, x2, y2 = inst.bbox
             x1p = max(0, x1 - self.crop_padding)
@@ -442,17 +527,29 @@ class DualStageInferenceEngine:
             y2p = min(height, y2 + self.crop_padding)
 
             crop_gray = left_gray[y1p:y2p, x1p:x2p]
-            crop_polar = polar_map[y1p:y2p, x1p:x2p]
             if crop_gray.size == 0:
-                updated.append(inst)
+                crops.append(None)
                 continue
-
+            crop_polar = polar_map[y1p:y2p, x1p:x2p]
             if self.model_b_input_mode == "gray":
-                crop = _gray_bgr_copy(crop_gray)
+                crops.append(_gray_bgr_copy(crop_gray))
             else:
-                crop = build_polar_yolo_image(crop_gray, crop_polar)
-            result = self.model_b.predict(crop)
-            if result.valid:
+                crops.append(build_polar_yolo_image(crop_gray, crop_polar))
+
+        if not any(crop is not None for crop in crops):
+            return list(instances)
+
+        batchable = [crop for crop in crops if crop is not None]
+        if hasattr(self.model_b, "predict_batch"):
+            batch_results = self.model_b.predict_batch(batchable)
+        else:
+            batch_results = [self.model_b.predict(crop) for crop in batchable]
+
+        results = iter(batch_results)
+        updated = []
+        for inst, crop in zip(instances, crops):
+            result = next(results) if crop is not None else None
+            if result is not None and result.valid:
                 inst.class_id = int(result.top1_id)
                 inst.class_name = result.top1_name or f"class_{inst.class_id}"
                 inst.confidence = round(float(result.top1_conf), 3)
@@ -480,3 +577,47 @@ def _invalid_depth(instance_id: int, reason: str) -> dict:
         "valid": False,
         "reason": reason,
     }
+
+
+def _polar_quality_record(
+    instance_id: int,
+    reason: str = "ok",
+    valid_ratio: float = 0.0,
+    in_bounds_ratio: float = 0.0,
+    brightness_valid_ratio: float = 0.0,
+) -> dict:
+    return {
+        "instance_id": instance_id,
+        "valid_ratio": round(float(valid_ratio), 4),
+        "in_bounds_ratio": round(float(in_bounds_ratio), 4),
+        "brightness_valid_ratio": round(float(brightness_valid_ratio), 4),
+        "reason": reason,
+    }
+
+
+def _instance_polar_quality(
+    inst: Instance,
+    polar_result: PolarFeatureResult | None,
+    reason: str,
+) -> dict:
+    """Per-instance polarization quality from the frame-level polar result.
+
+    Instances whose stereo stats were invalid (or when no polar computation
+    ran at all) get an all-zero record with the failure reason; the polar
+    gate is 0 for them.
+    """
+    mask_bool = np.asarray(inst.mask) > 0
+    total = int(mask_bool.sum())
+    if polar_result is None or total == 0:
+        return _polar_quality_record(inst.id, reason=reason)
+
+    valid = polar_result.valid_mask & mask_bool
+    return _polar_quality_record(
+        inst.id,
+        reason=reason,
+        valid_ratio=valid.sum() / total,
+        in_bounds_ratio=(polar_result.in_bounds_mask & mask_bool).sum() / total,
+        brightness_valid_ratio=(
+            polar_result.brightness_valid_mask & mask_bool
+        ).sum() / total,
+    )

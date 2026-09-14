@@ -156,3 +156,65 @@ def test_empty_factory():
     empty = ClassificationResult.empty()
     assert empty.valid is False
     assert empty.top1_id is None and empty.top1_name is None and empty.top1_conf is None
+
+
+class TestPredictBatch:
+    def make_multi_result_yolo(self):
+        class MultiResultYOLO(FakeYOLO):
+            def predict(self, source=None, **kwargs):
+                self.predict_calls.append({"source": source, **kwargs})
+                # One result per image in the source list.
+                return [
+                    FakeResult(FakeProbs(top1=i, top1conf=np.float32(0.5 + 0.1 * i)))
+                    for i in range(len(source))
+                ]
+
+        return MultiResultYOLO
+
+    def test_batch_returns_one_result_per_image_in_order(self, fake_ultralytics):
+        fake_ultralytics.YOLO = self.make_multi_result_yolo()
+        model = ClassificationModel("fake_cls.pt", device="cpu")
+        images = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(3)]
+
+        results = model.predict_batch(images)
+
+        assert len(results) == 3
+        assert [r.top1_id for r in results] == [0, 1, 2]
+        assert all(r.valid for r in results)
+
+    def test_batch_uses_single_model_call(self, fake_ultralytics):
+        fake_ultralytics.YOLO = self.make_multi_result_yolo()
+        model = ClassificationModel("fake_cls.pt", device="cpu")
+        images = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(5)]
+
+        model.predict_batch(images)
+
+        yolo = FakeYOLO.instances[-1]
+        assert len(yolo.predict_calls) == 1
+        assert len(yolo.predict_calls[0]["source"]) == 5
+
+    def test_batch_invalid_entries_get_empty_placeholders(self, fake_ultralytics):
+        fake_ultralytics.YOLO = self.make_multi_result_yolo()
+        model = ClassificationModel("fake_cls.pt", device="cpu")
+        images = [np.zeros((4, 4, 3), dtype=np.uint8), None, np.zeros((4, 4), dtype=np.uint8)]
+
+        results = model.predict_batch(images)
+
+        assert len(results) == 3
+        assert results[0].valid is True
+        assert results[1].valid is False
+        assert results[2].valid is False
+
+    def test_batch_forwards_imgsz_when_configured(self, fake_ultralytics):
+        fake_ultralytics.YOLO = self.make_multi_result_yolo()
+        model = ClassificationModel("fake_cls.pt", device="cpu", imgsz=224)
+        model.predict_batch([np.zeros((4, 4, 3), dtype=np.uint8)])
+
+        yolo = FakeYOLO.instances[-1]
+        assert yolo.predict_calls[0]["imgsz"] == 224
+
+    def test_empty_batch_returns_empty_list(self, fake_ultralytics):
+        fake_ultralytics.YOLO = self.make_multi_result_yolo()
+        model = ClassificationModel("fake_cls.pt", device="cpu")
+        assert model.predict_batch([]) == []
+        assert FakeYOLO.instances[-1].predict_calls == []

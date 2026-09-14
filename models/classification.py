@@ -90,8 +90,43 @@ class ClassificationModel:
         )
         if not results:
             return ClassificationResult.empty()
+        return self._parse_result(results[0])
 
-        result = results[0]
+    def predict_batch(self, images: list[np.ndarray]) -> list[ClassificationResult]:
+        """Classify a batch of pseudo-RGB crops in one model call.
+
+        Invalid entries (None or not (H, W, 3)) yield ``ClassificationResult.empty()``
+        placeholders so output order always matches input order.
+        """
+        outputs: list[ClassificationResult | None] = []
+        batch_indices: list[int] = []
+        for index, image in enumerate(images):
+            if image is None or getattr(image, "ndim", 0) != 3:
+                outputs.append(ClassificationResult.empty())
+            else:
+                outputs.append(None)
+                batch_indices.append(index)
+
+        if batch_indices:
+            kwargs: dict = {}
+            if self.imgsz is not None:
+                kwargs["imgsz"] = self.imgsz
+            results = self.model.predict(
+                source=[images[i] for i in batch_indices],
+                device=self.device,
+                verbose=False,
+                **kwargs,
+            )
+            for slot, index in enumerate(batch_indices):
+                if slot < len(results):
+                    outputs[index] = self._parse_result(results[slot])
+                else:
+                    outputs[index] = ClassificationResult.empty()
+
+        return [result if result is not None else ClassificationResult.empty() for result in outputs]
+
+    def _parse_result(self, result) -> ClassificationResult:
+        """Extract the top-1 outcome from one Ultralytics result object."""
         probs = getattr(result, "probs", None)
         if probs is None:
             return ClassificationResult.empty()

@@ -35,6 +35,7 @@ class PolarFeatureResult:
     abs_q: np.ndarray  # float32 (H, W), in [0, 1], 0 where invalid
     valid_mask: np.ndarray  # bool (H, W)
     in_bounds_mask: np.ndarray  # bool (H, W)
+    brightness_valid_mask: np.ndarray  # bool (H, W)
     valid_ratio: float
     in_bounds_ratio: float
     brightness_valid_ratio: float
@@ -234,6 +235,7 @@ def compute_polar_features(
         abs_q=abs_q,
         valid_mask=valid,
         in_bounds_mask=in_bounds,
+        brightness_valid_mask=brightness_valid,
         valid_ratio=valid_ratio,
         in_bounds_ratio=in_bounds_ratio,
         brightness_valid_ratio=brightness_valid_ratio,
