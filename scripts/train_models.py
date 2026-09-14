@@ -46,8 +46,16 @@ DEFAULT_PROJECT = "runs/train"
 # so default to single-process data loading there.
 DEFAULT_WORKERS = 0 if sys.platform == "win32" else 8
 
-SEG_BASE = "yolov8n-seg.pt"
-CLS_BASE = "yolov8n-cls.pt"
+# Development training bases: YOLO26nano as of 2026-09. The local
+# yolo26n.pt is a *detection* checkpoint and must not be used for Model A
+# (segmentation) or Model B (classification). yolo26n-seg.pt /
+# yolo26n-cls.pt are Ultralytics COCO-pretrained bases; when absent locally
+# they must be reported, not silently substituted.
+SEG_BASE = "yolo26n-seg.pt"
+CLS_BASE = "yolo26n-cls.pt"
+# Historical YOLOv8 bases kept for reference/regression comparisons only.
+LEGACY_SEG_BASE = "yolov8n-seg.pt"
+LEGACY_CLS_BASE = "yolov8n-cls.pt"
 
 STAGE_DEFAULTS: dict[str, dict] = {
     "baseline": {

@@ -16,9 +16,10 @@
 
 1. 对输入左右帧做同步检查和立体校正；已校正回放可跳过重复校正。
 2. Model A 在左灰度三通道副本上生成目标实例 mask。
-3. 每帧只运行一次 OpenCV StereoSGBM，所有实例复用同一稠密视差结果。
-4. 在实例 mask 内计算稳健视差和深度；所有有效实例合并后每帧只生成一次偏振特征图。
-5. Model B 对实例裁剪分类。`gray` 输入为 `[gray, gray, gray]`，实验模式 `polar` 为 `[gray, polar, gray]`。
+3. 由实例 bbox 合并生成水平条带，每帧只对条带区域运行一次 OpenCV StereoSGBM（条带接近全图时回退单次全图匹配），所有实例复用同一稠密视差结果。
+4. 深度使用实例内鲁棒中位视差；偏振差分使用逐像素可靠视差（视差无效或右图越界的像素偏振为 0，不再用固定视差填满目标）。
+5. Model B 对实例裁剪批量分类（`predict_batch`，不支持时回退逐目标）。`gray` 输入为 `[gray, gray, gray]`，实验模式 `polar` 为 `[gray, polar, gray]`。
+6. `process_frame_detailed` 输出各阶段耗时（诊断用，非吞吐承诺）和每实例偏振质量记录。
 
 类别 id 固定如下，不要在同一数据集中改成另一套材料标签：
 
@@ -41,6 +42,7 @@
 | `datasets/underwater_seg_binary_v2` | Model A 二值分割数据 |
 | `datasets/underwater_cls_gray_v2` | Model B 灰度分类裁剪，2808 张 |
 | `datasets/underwater_cls_polar_v2` | Model B 偏振分类裁剪，2808 张 |
+| `datasets/underwater_cls_fusion_v3` | Polar Fusion 数值 npz 数据集，2808 个样本（gray/signed_q/abs_q/valid/quality/class_id + manifest） |
 | `runs/train/run_20260913_initial/model_baseline` | 正式四类分割 baseline |
 | `runs/train/run_20260913_initial/model_a` | 正式二值实例分割模型 |
 | `runs/train/run_20260913_initial/model_b-gray` | 已验收的默认分类模型 |
@@ -102,6 +104,7 @@ python scripts/rectify_stereo_dataset.py --calib datasets/bd_image/stereo_calib.
 python scripts/prepare_yolo_dataset.py --clean
 python scripts/prepare_binary_seg_dataset.py --clean
 python scripts/prepare_cls_paired_datasets.py --clean
+python scripts/prepare_cls_fusion_dataset.py --clean
 ```
 
 `scripts/migrate_labelme_annotations.py` 专用于把旧错误校正坐标系中的标注迁移到 v2。其旧输入位于 `archives/datasets_original_20260912.zip`，不要直接对当前 v2 标注再次迁移。
@@ -134,6 +137,8 @@ python scripts/train_models.py --stage b-polar --device 0 --run-id <run-id>
 run id 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能包含路径分隔符。总控脚本会在训练前检查所有选中模型的目标目录；若目录已存在，会拒绝启动，避免生成含义不清的递增目录。
 
 训练固定 seed `2026`、确定性模式、AMP 和 early stopping。Windows 默认 `workers=0`，避免子进程重新加载 CUDA DLL 失败。
+
+开发默认基座自 2026-09-14 起切换为 YOLO26nano：分割用 `yolo26n-seg.pt`，分类用 `yolo26n-cls.pt`（见 `scripts/train_models.py` 的 `SEG_BASE`/`CLS_BASE`）。本地 `yolo26n.pt` 是检测模型，不用于 Model A 或 Model B；`yolo26n-seg.pt`/`yolo26n-cls.pt` 本地缺失时需在有网络时下载，不会自动替换为其他权重。已有 YOLOv8 权重、报告和配置仅作历史对照，正式运行时配置（`configs/default.yaml` 中 `model_b.path` 的 Gray 权重）保持不变。
 
 ## 测试
 

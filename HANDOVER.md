@@ -14,11 +14,12 @@
 同步左右帧
   -> 立体校正（回放已校正图时跳过）
   -> 左灰度三通道 Model A（二值实例分割）
-  -> 每帧一次 OpenCV StereoSGBM
-  -> 每实例稳健视差、有效率和深度
-  -> 所有有效实例每帧一次偏振特征计算
-  -> 每实例裁剪 Model B（默认 gray，可切换 polar）
+  -> 实例 bbox 合并水平条带，每帧一次条带 SGBM（接近全图时回退单次全图）
+  -> 每实例稳健中位视差、有效率和深度
+  -> 逐像素可靠视差的偏振差分（无效/越界像素偏振为 0，带 valid_mask）
+  -> 每实例裁剪 Model B 批量分类（默认 gray，可切换 polar）
   -> GUI 显示 mask、类别、深度、同步状态和偏振图
+  -> process_frame_detailed 输出各阶段耗时和每实例偏振质量
 ```
 
 必须保持的约定：
@@ -112,6 +113,15 @@ macro-F1 差值仅 `+0.000185`，按采集组 bootstrap 的 95% CI 为 `[-0.0029
 - 人工修正版已传导到四类 segmentation、二值 Model A、gray/polar Model B 数据集；split 与 pair manifest 哈希保持不变。
 - 正式权重未重新训练；在修正后的 test 数据上复评，分割与 gray/polar 消融报告和修正前逐字节一致。
 - 完整严格测试：`379 passed, 1 skipped`，最近一次执行时间 34.64 秒。
+
+### 2026-09-14 推理与数据链路修正（未切换正式权重）
+
+- 偏振差分新增结构化结果 `PolarFeatureResult`（signed_q/abs_q/valid_mask/in_bounds_mask 等）：右图越界、非正视差、左右一致性失败和暗像素一律判无效并置零，修复了越界区域伪 `polar=1` 饱和问题；旧 `compute_polar_feature` 保持原行为。
+- 新增目标水平条带匹配：`build_horizontal_bands`/`merge_horizontal_bands`/`StereoMatcher.compute_bands`，仅对合并后互不重叠的条带运行 SGBM，条带为空不匹配，覆盖接近全图时回退单次全图。
+- 推理引擎改为 条带匹配 -> 中位视差深度 + 逐像素偏振 -> Model B 批量分类（`predict_batch`，无则回退）；`DetailedInferenceResult` 新增阶段耗时与每实例偏振质量。Gray 模式行为与旧三元组接口不变。
+- 生成 `datasets/underwater_cls_fusion_v3`（2808 个数值 npz + manifest + 审计，见 `analysis/data/fusion_v3_audit.json`），偏振通道来自逐像素可靠视差。
+- 开发训练基座切换为 YOLO26nano（`yolo26n-seg.pt`/`yolo26n-cls.pt`，本地缺失、需网络下载时显式报告）；本地 `yolo26n.pt` 为检测模型不得用作 Model A/B 基座；YOLOv8 资产保留为历史对照。
+- 新增 Polar Fusion 模型骨架与训练/评测入口（`models/polar_fusion.py`、`scripts/train_polar_fusion.py`、`scripts/eval_polar_fusion.py`），仅支持 `--dry-run` 验证，正式训练尚未启动。
 
 ## 已解决问题的影响
 

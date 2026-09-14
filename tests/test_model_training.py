@@ -17,7 +17,7 @@ class TestStageDefaults:
     def test_baseline_and_a_use_seg_defaults(self):
         for stage in ("baseline", "a"):
             defaults = tm.STAGE_DEFAULTS[stage]
-            assert defaults["base"] == "yolov8n-seg.pt"
+            assert defaults["base"] == "yolo26n-seg.pt"
             assert defaults["imgsz"] == 640
             assert defaults["batch"] == 8
             assert defaults["epochs"] == 100
@@ -33,12 +33,26 @@ class TestStageDefaults:
     def test_b_stages_use_cls_defaults_and_v2_roots(self):
         for stage in ("b-gray", "b-polar"):
             defaults = tm.STAGE_DEFAULTS[stage]
-            assert defaults["base"] == "yolov8n-cls.pt"
+            assert defaults["base"] == "yolo26n-cls.pt"
             assert defaults["imgsz"] == 224
             assert defaults["batch"] == 64
             assert defaults["epochs"] == 80
         assert tm.STAGE_DEFAULTS["b-gray"]["data"] == "datasets/underwater_cls_gray_v2"
         assert tm.STAGE_DEFAULTS["b-polar"]["data"] == "datasets/underwater_cls_polar_v2"
+
+    def test_development_bases_are_yolo26_variants(self):
+        assert tm.SEG_BASE == "yolo26n-seg.pt"
+        assert tm.CLS_BASE == "yolo26n-cls.pt"
+
+    def test_legacy_yolov8_bases_kept_for_reference(self):
+        assert tm.LEGACY_SEG_BASE == "yolov8n-seg.pt"
+        assert tm.LEGACY_CLS_BASE == "yolov8n-cls.pt"
+
+    def test_detection_checkpoint_is_not_a_training_base(self):
+        # The local yolo26n.pt is a detection model: it must never be the
+        # base for Model A (seg) or Model B (cls).
+        for defaults in tm.STAGE_DEFAULTS.values():
+            assert defaults["base"] != "yolo26n.pt"
 
 
 class TestBuildTrainKwargs:
@@ -271,7 +285,7 @@ def test_train_stage_forwards_kwargs_and_override(
     assert kwargs["seed"] == 2026
     assert kwargs["hsv_h"] == 0.0
     assert kwargs["device"] == "cpu"
-    assert FakeTrainYOLO.weight_loaded == "yolov8n-cls.pt"
+    assert FakeTrainYOLO.weight_loaded == "yolo26n-cls.pt"
     assert Path(save_dir) == Path(FakeTrainer.save_dir)
 
 

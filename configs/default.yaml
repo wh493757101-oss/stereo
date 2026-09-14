@@ -67,6 +67,9 @@ data:
   segmentation_binary_root: "datasets/underwater_seg_binary_v2"
   cls_gray_root: "datasets/underwater_cls_gray_v2"
   cls_polar_root: "datasets/underwater_cls_polar_v2"
+  # V3 fusion samples: numeric-only npz (gray/signed_q/abs_q/valid/quality/
+  # class_id) + dataset_manifest.csv; see scripts/prepare_cls_fusion_dataset.py
+  cls_fusion_root: "datasets/underwater_cls_fusion_v3"
 
 # Stereo matching (OpenCV StereoSGBM, dense, left-right consistency checked)
 # max_disp / block_size / lr_check_threshold_px are full-resolution pixels;
@@ -90,6 +93,9 @@ polarization:
 
 # Training (see scripts/train_models.py; all stages seed 2026, deterministic,
 # AMP, early stopping with patience 20, explicit project/name, best+last saved)
+# Development bases are YOLO26nano variants (yolo26n-seg.pt / yolo26n-cls.pt).
+# The local yolo26n.pt is a detection checkpoint and is NOT used for Model A
+# or Model B. YOLOv8 weights/reports remain as historical reference.
 training:
   seed: 2026
   patience: 20
@@ -99,21 +105,21 @@ training:
   # the CUDA DLLs. Other platforms use the Ultralytics default of 8.
   workers: 0
   baseline:
-    base: "yolov8n-seg.pt"
+    base: "yolo26n-seg.pt"
     data: "datasets/underwater_seg_v2/data.yaml"
     epochs: 100
     imgsz: 640
     batch: 8
     device: "0"
   model_a:
-    base: "yolov8n-seg.pt"
+    base: "yolo26n-seg.pt"
     data: "datasets/underwater_seg_binary_v2/data.yaml"
     epochs: 100
     imgsz: 640
     batch: 8
     device: "0"
   model_b_gray:
-    base: "yolov8n-cls.pt"
+    base: "yolo26n-cls.pt"
     data: "datasets/underwater_cls_gray_v2"
     epochs: 80
     imgsz: 224
@@ -125,7 +131,7 @@ training:
     hsv_s: 0.0
     hsv_v: 0.0
   model_b_polar:
-    base: "yolov8n-cls.pt"
+    base: "yolo26n-cls.pt"
     data: "datasets/underwater_cls_polar_v2"
     epochs: 80
     imgsz: 224
