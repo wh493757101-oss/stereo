@@ -207,10 +207,16 @@ def dry_run(args: argparse.Namespace) -> int:
         "joint_default_init_present": joint_default_init,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    if not base_present:
+    if not base_present and not args.gray_weights:
         print(
             f"NOTE: base checkpoint {args.base} is not present locally; "
-            "formal training requires it (no automatic download).",
+            "the fresh-head build (--gray-weights '') requires it "
+            "(no automatic download).",
+            file=sys.stderr,
+        )
+        print(
+            "NOTE: with pretrained --gray-weights the base checkpoint is "
+            "not needed (the loaded weights carry their own architecture).",
             file=sys.stderr,
         )
     if args.gray_weights and not gray_weights_present:
@@ -253,6 +259,21 @@ def _replace_cls_head(classification_model, num_classes: int) -> None:
     head.linear = torch.nn.Linear(old_linear.in_features, num_classes)
 
 
+def _architecture_name(module) -> str:
+    """Actual architecture of an Ultralytics model, e.g. ``yolov8n-cls``.
+
+    Derived from the loaded checkpoint's yaml, so the recorded base model
+    reflects what really runs (the legacy gray weights are YOLOv8, not the
+    requested YOLO26 default).
+    """
+    yaml_info = getattr(module, "yaml", None)
+    if isinstance(yaml_info, dict):
+        yaml_file = str(yaml_info.get("yaml_file", ""))
+        if yaml_file:
+            return Path(yaml_file).stem
+    return ""
+
+
 def prepare_gray_backbone(
     base_path: Path,
     gray_weights: str,
@@ -291,7 +312,10 @@ def prepare_gray_backbone(
             )
         perm = build_gray_class_perm(module.names, class_names)
         info = {
-            "source": str(weights_path),
+            # The architecture is whatever the loaded weights carry (e.g.
+            # yolov8n-cls for the legacy run), not the requested --base.
+            "base_model": _architecture_name(module) or str(weights_path.name),
+            "gray_weights": str(weights_path),
             "head_replaced": False,
             "perm": perm,
             "gray_class_names": [
@@ -305,7 +329,8 @@ def prepare_gray_backbone(
         module.names = {i: name for i, name in enumerate(class_names)}
         perm = None
         info = {
-            "source": str(base_path),
+            "base_model": _architecture_name(module) or Path(str(base_path)).name,
+            "gray_weights": "",
             "head_replaced": True,
             "perm": None,
             "gray_class_names": list(class_names),
@@ -379,6 +404,39 @@ def _apply_phase_modes(model: PolarFusionModel, joint: bool) -> None:
         model.gray_backbone.eval()
 
 
+def _restore_backbone(
+    init_payload: dict, class_names: list[str], device: str
+) -> GrayBackboneAdapter:
+    """Rebuild the gray branch exactly as the init checkpoint was built.
+
+    A fresh-head checkpoint was built from the (1000-class) base with a
+    replaced head: rebuilding must go through the fresh-head branch again.
+    Feeding the recorded base here as gray weights would fail the
+    head-width check, and silently swapping in different gray weights
+    would break resume equivalence.
+    """
+    head_replaced = bool(init_payload.get("head_replaced", False))
+    restore_gray_weights = (
+        "" if head_replaced else str(init_payload.get("gray_weights", ""))
+    )
+    restore_base = str(init_payload.get("base_model", DEFAULT_BASE_MODEL))
+    restore_base_path = Path(restore_base)
+    restore_base_path = (
+        restore_base_path if restore_base_path.is_absolute()
+        else PROJECT_ROOT / restore_base
+    )
+    if head_replaced and not restore_base_path.is_file():
+        raise FileNotFoundError(
+            f"base checkpoint {restore_base_path} (recorded in the init "
+            "checkpoint) is missing; no automatic download"
+        )
+    # Weights are then overwritten by the checkpoint state dict.
+    backbone, _ = prepare_gray_backbone(
+        restore_base_path, restore_gray_weights, class_names, device
+    )
+    return backbone
+
+
 def run_training(args: argparse.Namespace) -> Path:
     """Full training loop (freeze or joint). Not executed by --dry-run."""
     data_root = PROJECT_ROOT / args.data if not Path(args.data).is_absolute() else Path(args.data)
@@ -392,13 +450,16 @@ def run_training(args: argparse.Namespace) -> Path:
 
     init_checkpoint = _resolve_init_checkpoint(args)
     if init_checkpoint is None:
+        gray_weights = args.gray_weights
         base_path = Path(args.base)
         base_path = base_path if base_path.is_absolute() else PROJECT_ROOT / base_path
-        if not base_path.is_file():
+        # The base checkpoint is only needed for the fresh-head build; with
+        # pretrained gray weights the loaded checkpoint carries its own
+        # architecture (which may differ from --base, e.g. YOLOv8 legacy).
+        if not gray_weights and not base_path.is_file():
             raise FileNotFoundError(
                 f"base checkpoint {base_path} is missing; no automatic download"
             )
-        gray_weights = args.gray_weights
         backbone, gray_info = prepare_gray_backbone(
             base_path, gray_weights, class_names, device
         )
@@ -406,28 +467,16 @@ def run_training(args: argparse.Namespace) -> Path:
         model = PolarFusionModel(backbone, num_classes=num_classes).to(device)
         metadata: FusionCheckpointMetadata = fusion_metadata(
             class_names,
-            base_model=args.base,
+            base_model=gray_info["base_model"],
             imgsz=args.imgsz,
-            gray_init=gray_info["source"],
+            gray_weights=gray_info["gray_weights"],
             gray_class_names=gray_info["gray_class_names"],
+            head_replaced=gray_info["head_replaced"],
+            class_permutation=tuple(gray_info["perm"]) if gray_info["perm"] else (),
         )
     else:
         init_payload = torch.load(init_checkpoint, map_location="cpu", weights_only=False)
-        init_metadata = fusion_metadata(
-            class_names, base_model=str(init_payload.get("base_model", args.base)),
-            imgsz=args.imgsz,
-            gray_init=str(init_payload.get("gray_init", "")),
-            gray_class_names=list(init_payload.get("gray_class_names", ())),
-        )
-        # Rebuild the same architecture the checkpoint was trained with:
-        # gray-weights branch when recorded, otherwise a fresh head from the
-        # base (weights are then overwritten by the checkpoint state dict).
-        backbone, _ = prepare_gray_backbone(
-            PROJECT_ROOT / args.base,
-            init_metadata.gray_init,
-            class_names,
-            device,
-        )
+        backbone = _restore_backbone(init_payload, class_names, device)
         model, metadata, _ = load_fusion_checkpoint(init_checkpoint, backbone)
         model = model.to(device)
         if list(metadata.class_names) != class_names:

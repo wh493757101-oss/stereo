@@ -38,7 +38,7 @@ from models.polar_fusion import (
     read_fusion_metadata,
     read_manifest_split,
 )
-from scripts.train_polar_fusion import prepare_gray_backbone
+from scripts.train_polar_fusion import prepare_gray_backbone, torch_device_name
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -133,15 +133,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"checkpoint not found: {checkpoint}", file=sys.stderr)
         return 2
 
-    device = args.device
+    try:
+        device = torch_device_name(args.device)
+    except ValueError as exc:
+        print(f"unsupported --device {args.device!r}: {exc}", file=sys.stderr)
+        return 2
     metadata = read_fusion_metadata(checkpoint)
 
+    # Rebuild the gray branch exactly as recorded: fresh-head checkpoints
+    # need the base checkpoint they were built from, gray-weights
+    # checkpoints need their recorded pretrained weights (which carry the
+    # real architecture, possibly different from base_model).
     base_name = args.base or metadata.base_model
     base_path = Path(base_name)
     if not base_path.is_absolute():
         base_path = PROJECT_ROOT / base_name
-    if metadata.gray_init:
-        gray_path = Path(metadata.gray_init)
+    if metadata.head_replaced:
+        if not base_path.is_file():
+            print(
+                f"gray backbone base checkpoint {base_path} (recorded in the "
+                "fusion checkpoint) is missing; evaluation requires it "
+                "locally (no automatic download).",
+                file=sys.stderr,
+            )
+            return 2
+        gray_weights_arg = ""
+    else:
+        gray_weights_arg = metadata.gray_weights
+        gray_path = Path(gray_weights_arg)
         gray_path = gray_path if gray_path.is_absolute() else PROJECT_ROOT / gray_path
         if not gray_path.is_file():
             print(
@@ -150,16 +169,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-    elif not base_path.is_file():
-        print(
-            f"gray backbone checkpoint {base_path} is missing; evaluation "
-            "requires it locally (no automatic download).",
-            file=sys.stderr,
-        )
-        return 2
 
     backbone, _ = prepare_gray_backbone(
-        base_path, metadata.gray_init, list(metadata.class_names), device
+        base_path, gray_weights_arg, list(metadata.class_names), device
     )
     model, metadata, _ = load_fusion_checkpoint(checkpoint, backbone)
     model = model.to(device)

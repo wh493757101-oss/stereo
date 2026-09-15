@@ -244,22 +244,35 @@ def build_gray_class_perm(
 
 @dataclasses.dataclass(frozen=True)
 class FusionCheckpointMetadata:
+    """Audit metadata for a fusion checkpoint.
+
+    ``base_model`` records the architecture the gray branch was actually
+    built from (derived from the loaded checkpoint's yaml, e.g.
+    ``yolov8n-cls`` for the legacy weights), never the requested default.
+    ``gray_weights`` is the path of the pretrained 4-class gray checkpoint
+    loaded into the branch (empty string for a fresh-head build).
+    """
+
     version: str
     class_names: tuple[str, ...]
     input_format: str
     base_model: str
     quality_vector_keys: tuple[str, ...]
     imgsz: int
-    gray_init: str = ""
+    gray_weights: str = ""
     gray_class_names: tuple[str, ...] = ()
+    head_replaced: bool = False
+    class_permutation: tuple[int, ...] = ()
 
 
 def fusion_metadata(
     class_names: Sequence[str],
     base_model: str = DEFAULT_BASE_MODEL,
     imgsz: int = 224,
-    gray_init: str = "",
+    gray_weights: str = "",
     gray_class_names: Sequence[str] = (),
+    head_replaced: bool = False,
+    class_permutation: Sequence[int] = (),
 ) -> FusionCheckpointMetadata:
     return FusionCheckpointMetadata(
         version=FUSION_VERSION,
@@ -268,8 +281,10 @@ def fusion_metadata(
         base_model=str(base_model),
         quality_vector_keys=tuple(QUALITY_VECTOR_KEYS),
         imgsz=int(imgsz),
-        gray_init=str(gray_init),
+        gray_weights=str(gray_weights),
         gray_class_names=tuple(str(name) for name in gray_class_names),
+        head_replaced=bool(head_replaced),
+        class_permutation=tuple(int(i) for i in class_permutation),
     )
 
 
@@ -293,8 +308,10 @@ def save_fusion_checkpoint(
         "base_model": metadata.base_model,
         "quality_vector_keys": list(metadata.quality_vector_keys),
         "imgsz": metadata.imgsz,
-        "gray_init": metadata.gray_init,
+        "gray_weights": metadata.gray_weights,
         "gray_class_names": list(metadata.gray_class_names),
+        "head_replaced": metadata.head_replaced,
+        "class_permutation": list(metadata.class_permutation),
         "state_dict": model.state_dict(),
     }
     if extra:
@@ -304,9 +321,7 @@ def save_fusion_checkpoint(
     return path
 
 
-def read_fusion_metadata(path: str | Path) -> FusionCheckpointMetadata:
-    """Read only the audit metadata from a checkpoint (no model rebuild)."""
-    payload = torch.load(path, map_location="cpu", weights_only=False)
+def _metadata_from_payload(path: str | Path, payload: dict[str, Any]) -> FusionCheckpointMetadata:
     for field in ("version", "class_names", "input_format", "base_model",
                   "quality_vector_keys"):
         if field not in payload:
@@ -318,9 +333,17 @@ def read_fusion_metadata(path: str | Path) -> FusionCheckpointMetadata:
         base_model=str(payload["base_model"]),
         quality_vector_keys=tuple(payload["quality_vector_keys"]),
         imgsz=int(payload.get("imgsz", 224)),
-        gray_init=str(payload.get("gray_init", "")),
+        gray_weights=str(payload.get("gray_weights", "")),
         gray_class_names=tuple(str(n) for n in payload.get("gray_class_names", ())),
+        head_replaced=bool(payload.get("head_replaced", False)),
+        class_permutation=tuple(int(i) for i in payload.get("class_permutation", ())),
     )
+
+
+def read_fusion_metadata(path: str | Path) -> FusionCheckpointMetadata:
+    """Read only the audit metadata from a checkpoint (no model rebuild)."""
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    return _metadata_from_payload(path, payload)
 
 
 def load_fusion_checkpoint(
@@ -333,20 +356,9 @@ def load_fusion_checkpoint(
     checkpoint architecture (its weights are overwritten by the checkpoint).
     """
     payload = torch.load(path, map_location="cpu", weights_only=False)
-    for field in ("version", "class_names", "input_format", "base_model",
-                  "quality_vector_keys", "state_dict"):
-        if field not in payload:
-            raise ValueError(f"checkpoint {path} is missing field {field!r}")
-    metadata = FusionCheckpointMetadata(
-        version=str(payload["version"]),
-        class_names=tuple(str(n) for n in payload["class_names"]),
-        input_format=str(payload["input_format"]),
-        base_model=str(payload["base_model"]),
-        quality_vector_keys=tuple(payload["quality_vector_keys"]),
-        imgsz=int(payload.get("imgsz", 224)),
-        gray_init=str(payload.get("gray_init", "")),
-        gray_class_names=tuple(str(n) for n in payload.get("gray_class_names", ())),
-    )
+    if "state_dict" not in payload:
+        raise ValueError(f"checkpoint {path} is missing field 'state_dict'")
+    metadata = _metadata_from_payload(path, payload)
     model = PolarFusionModel(
         gray_backbone, num_classes=len(metadata.class_names),
         quality_dim=len(metadata.quality_vector_keys),

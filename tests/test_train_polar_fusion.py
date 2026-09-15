@@ -227,6 +227,60 @@ class TestPrepareGrayBackbone:
             )
 
 
+class TestRestoreBackbone:
+    """Freeze -> joint resume must rebuild the gray branch the same way."""
+
+    def test_gray_weights_checkpoint_restores_from_recorded_weights(
+        self, tmp_path, fake_ultralytics
+    ):
+        weights = tmp_path / "model_b-gray.pt"
+        weights.write_bytes(b"fake")
+        backbone = tpf._restore_backbone(
+            {
+                "base_model": "yolo26n-cls.pt",
+                "gray_weights": str(weights),
+                "head_replaced": False,
+            },
+            ["metal_submarine", "plastic_submarine", "plastic_fish", "real_fish"],
+            "cpu",
+        )
+        assert fake_ultralytics.YOLO.last_weights == str(weights)
+        assert backbone.perm is not None and backbone.perm.tolist() == [0, 2, 1, 3]
+
+    def test_fresh_head_checkpoint_restores_via_base_not_gray_weights(
+        self, tmp_path, fake_ultralytics
+    ):
+        # A fresh-head checkpoint records the 1000-class base; restoring
+        # must rebuild with a replaced head (base branch), never feed the
+        # base into the gray-weights branch (which would fail on width).
+        base = tmp_path / "yolo26n-cls.pt"
+        base.write_bytes(b"fake")
+        backbone = tpf._restore_backbone(
+            {
+                "base_model": str(base),
+                "gray_weights": "",
+                "head_replaced": True,
+            },
+            ["metal_submarine", "plastic_submarine", "plastic_fish", "real_fish"],
+            "cpu",
+        )
+        assert fake_ultralytics.YOLO.last_weights == str(base)
+        assert backbone.perm is None
+        assert backbone.module.model[-1].linear.out_features == 4
+
+    def test_fresh_head_restore_missing_base_refused(self, fake_ultralytics):
+        with pytest.raises(FileNotFoundError, match="no automatic download"):
+            tpf._restore_backbone(
+                {
+                    "base_model": "missing-base.pt",
+                    "gray_weights": "",
+                    "head_replaced": True,
+                },
+                ["metal_submarine", "plastic_submarine", "plastic_fish", "real_fish"],
+                "cpu",
+            )
+
+
 class TestPhaseRunDir:
     def test_conflicting_run_directory_refused(self, tmp_path):
         run_dir = tpf.PROJECT_ROOT / "runs" / "train" / "test_phase_conflict" / "polar_fusion" / "freeze"
@@ -399,6 +453,7 @@ class TestDryRun:
                 "--dry-run",
                 "--data", str(mini_dataset),
                 "--base", "nonexistent-base.pt",
+                "--gray-weights", "",
             ]
         )
         # Missing base is reported, not fatal, and never downloaded.
@@ -406,6 +461,25 @@ class TestDryRun:
         err = capsys.readouterr().err
         assert "nonexistent-base.pt" in err
         assert "no automatic download" in err.lower()
+
+    def test_dry_run_skips_base_note_when_gray_weights_present(
+        self, mini_dataset, capsys
+    ):
+        # Any existing file works: dry-run only checks presence.
+        stand_in = str(mini_dataset / "dataset_manifest.csv")
+        exit_code = tpf.main(
+            [
+                "--run-id", "run_dry",
+                "--dry-run",
+                "--data", str(mini_dataset),
+                "--base", "nonexistent-base.pt",
+                "--gray-weights", stand_in,
+            ]
+        )
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "nonexistent-base.pt" not in captured.err
+        assert '"gray_weights_present": true' in captured.out
 
     def test_dry_run_creates_no_run_outputs(self, mini_dataset):
         tpf.main(["--run-id", "run_dry", "--dry-run", "--data", str(mini_dataset)])
@@ -444,6 +518,7 @@ class TestStructureCheck:
 class TestTrainingGate:
     def test_training_refused_when_base_missing(self, mini_dataset, monkeypatch):
         monkeypatch.setattr(tpf, "validate_dataset", lambda root: None)
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
         with pytest.raises(FileNotFoundError, match="no automatic download"):
             tpf.run_training(
                 tpf.parse_args(
@@ -451,6 +526,33 @@ class TestTrainingGate:
                         "--run-id", "run_x",
                         "--data", str(mini_dataset),
                         "--base", "definitely-missing.pt",
+                        "--gray-weights", "",
+                    ]
+                )
+            )
+
+    def test_training_with_gray_weights_does_not_require_base(
+        self, mini_dataset, monkeypatch
+    ):
+        """The loaded gray checkpoint carries its own architecture, so a
+        missing --base must not block the run (issue: base forced yolo26
+        even for the YOLOv8 legacy weights)."""
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: None)
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+
+        def refuse(*a, **kw):
+            raise FileNotFoundError("prepare_gray_backbone reached")
+
+        monkeypatch.setattr(tpf, "prepare_gray_backbone", refuse)
+        stand_in = str(mini_dataset / "dataset_manifest.csv")
+        with pytest.raises(FileNotFoundError, match="prepare_gray_backbone"):
+            tpf.run_training(
+                tpf.parse_args(
+                    [
+                        "--run-id", "run_x",
+                        "--data", str(mini_dataset),
+                        "--base", "definitely-missing.pt",
+                        "--gray-weights", stand_in,
                     ]
                 )
             )

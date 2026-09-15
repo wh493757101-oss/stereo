@@ -171,21 +171,38 @@ class TestGrayInitMetadata:
         model = PolarFusionModel(TinyBackbone(4), num_classes=4)
         meta = fusion_metadata(
             ["w", "x", "y", "z"],
-            gray_init="runs/train/run_20260913_initial/model_b-gray/weights/best.pt",
+            gray_weights="runs/train/run_20260913_initial/model_b-gray/weights/best.pt",
             gray_class_names=[
                 "metal_submarine",
                 "plastic_fish",
                 "plastic_submarine",
                 "real_fish",
             ],
+            head_replaced=False,
+            class_permutation=[0, 2, 1, 3],
         )
         path = save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
         assert read_fusion_metadata(path) == meta
 
     def test_metadata_defaults_empty(self):
         meta = fusion_metadata(["w", "x", "y", "z"])
-        assert meta.gray_init == ""
+        assert meta.gray_weights == ""
         assert meta.gray_class_names == ()
+        assert meta.head_replaced is False
+        assert meta.class_permutation == ()
+
+    def test_fresh_head_metadata_records_replacement(self, tmp_path):
+        model = PolarFusionModel(TinyBackbone(4), num_classes=4)
+        meta = fusion_metadata(
+            ["w", "x", "y", "z"],
+            base_model="yolo26n-cls.pt",
+            head_replaced=True,
+        )
+        path = save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+        loaded = read_fusion_metadata(path)
+        assert loaded.head_replaced is True
+        assert loaded.gray_weights == ""
+        assert loaded.base_model == "yolo26n-cls.pt"
 
 
 class TestHeads:
