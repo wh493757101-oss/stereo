@@ -106,6 +106,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--gray-lr", type=float, default=1e-5, help="Gray backbone lr (joint phase)."
     )
     parser.add_argument("--phase", choices=PHASES, default=DEFAULT_PHASE)
+    parser.add_argument(
+        "--lambda-gray",
+        type=float,
+        default=1.0,
+        help="Weight of the gray-branch CE auxiliary loss "
+        "L = CE(fusion) + lambda_gray*CE(gray) + lambda_kd*KL(gray||teacher).",
+    )
+    parser.add_argument(
+        "--lambda-kd",
+        type=float,
+        default=1.0,
+        help="Weight of the KL distillation loss against the frozen gray "
+        "teacher (joint phase only).",
+    )
+    parser.add_argument(
+        "--allow-untrained-gray",
+        action="store_true",
+        help="Explicitly allow --phase freeze with a fresh (untrained) gray "
+        "head from the base checkpoint. Refused otherwise: the formal gray "
+        "branch must come from a trained gray Model B.",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
         "--dry-run",
@@ -273,6 +294,79 @@ def _verify_backbone_output(backbone: GrayBackboneAdapter, imgsz: int, num_class
         )
 
 
+def classification_metrics(
+    labels: list[int], preds: list[int], num_classes: int
+) -> dict:
+    """Accuracy, macro-F1 and per-class recall for one split.
+
+    Macro-F1 is the primary model-selection metric: with the imbalanced
+    V3/V4 val sets, accuracy is dominated by the majority classes and can
+    hide a collapsed minority class (``real_fish``).
+    """
+    total = len(labels)
+    accuracy = sum(1 for l, p in zip(labels, preds) if l == p) / max(total, 1)
+    f1s = []
+    recalls = {}
+    for cls in range(num_classes):
+        tp = sum(1 for l, p in zip(labels, preds) if l == cls and p == cls)
+        fp = sum(1 for l, p in zip(labels, preds) if l != cls and p == cls)
+        fn = sum(1 for l, p in zip(labels, preds) if l == cls and p != cls)
+        class_total = tp + fn
+        recalls[cls] = tp / class_total if class_total else 0.0
+        if tp == 0:
+            f1s.append(0.0)
+        else:
+            precision = tp / (tp + fp)
+            recall = tp / class_total
+            f1s.append(2 * precision * recall / (precision + recall))
+    return {
+        "accuracy": accuracy,
+        "macro_f1": float(np.mean(f1s)),
+        "per_class_recall": {str(cls): recalls[cls] for cls in recalls},
+    }
+
+
+@torch.no_grad()
+def _evaluate(model: PolarFusionModel, loader, device: str) -> dict:
+    """Fusion-branch metrics over a loader (final_logits predictions)."""
+    model.eval()
+    labels_all: list[int] = []
+    preds: list[int] = []
+    for gray, polar, quality, labels in loader:
+        out = model(gray.to(device), polar.to(device), quality.to(device))
+        preds.extend(out["final_logits"].argmax(dim=1).cpu().tolist())
+        labels_all.extend(labels.tolist())
+    num_classes = model.num_classes
+    return classification_metrics(labels_all, preds, num_classes)
+
+
+def _fusion_loss(
+    out: dict[str, torch.Tensor],
+    labels: torch.Tensor,
+    teacher_logits: torch.Tensor | None,
+    criterion: nn.Module,
+    lambda_gray: float,
+    lambda_kd: float,
+) -> torch.Tensor:
+    """L = CE(fusion, y) + lambda_gray*CE(gray, y) + lambda_kd*KL(gray||teacher).
+
+    The gray CE term keeps the gray branch a competent standalone
+    classifier; the KL term pins the (unfrozen) gray branch to the frozen
+    pre-joint teacher so joint finetuning cannot drift it away.
+    """
+    loss = criterion(out["final_logits"], labels)
+    gray_logits = out["gray_logits"]
+    loss = loss + lambda_gray * criterion(gray_logits, labels)
+    if teacher_logits is not None and lambda_kd > 0:
+        kd = nn.functional.kl_div(
+            nn.functional.log_softmax(gray_logits, dim=-1),
+            nn.functional.softmax(teacher_logits, dim=-1),
+            reduction="batchmean",
+        )
+        loss = loss + lambda_kd * kd
+    return loss
+
+
 def _phase_run_dir(run_id: str, phase: str) -> Path:
     """Per-phase output directory; refuses to overwrite existing runs."""
     run_dir = PROJECT_ROOT / "runs" / "train" / run_id / "polar_fusion" / phase
@@ -356,6 +450,13 @@ def run_training(args: argparse.Namespace) -> Path:
 
     init_checkpoint = _resolve_init_checkpoint(args)
     if init_checkpoint is None:
+        if args.phase == "freeze" and not args.gray_weights and not args.allow_untrained_gray:
+            raise ValueError(
+                "--phase freeze with a fresh untrained gray head is refused; "
+                "the formal gray branch must come from a trained gray Model B "
+                "(pass --gray-weights) or override explicitly with "
+                "--allow-untrained-gray"
+            )
         gray_weights = args.gray_weights
         base_path = Path(args.base)
         base_path = base_path if base_path.is_absolute() else PROJECT_ROOT / base_path
@@ -406,6 +507,18 @@ def run_training(args: argparse.Namespace) -> Path:
     optimizer = torch.optim.AdamW(head_params)
     criterion = nn.CrossEntropyLoss()
 
+    # Joint-phase teacher: a frozen snapshot of the gray branch before any
+    # joint update; the KL term keeps the finetuned branch from drifting
+    # away from the accepted gray model (issue 7).
+    teacher_backbone = None
+    if joint:
+        import copy
+
+        teacher_backbone = copy.deepcopy(model.gray_backbone).to(device)
+        teacher_backbone.eval()
+        for param in teacher_backbone.parameters():
+            param.requires_grad_(False)
+
     train_paths, _, _ = read_manifest_split(data_root, "train")
     val_paths, _, _ = read_manifest_split(data_root, "val")
     train_loader = torch.utils.data.DataLoader(
@@ -422,7 +535,7 @@ def run_training(args: argparse.Namespace) -> Path:
     )
 
     run_dir = _phase_run_dir(args.run_id, args.phase)
-    best_val_acc = -1.0
+    best_key = (-1.0, -1.0)  # (macro_f1, accuracy)
     best_path = run_dir / "best.pt"
     for epoch in range(args.epochs):
         _apply_phase_modes(model, joint)
@@ -433,14 +546,34 @@ def run_training(args: argparse.Namespace) -> Path:
             labels = labels.to(device)
             optimizer.zero_grad()
             out = model(gray, polar, quality)
-            loss = criterion(out["final_logits"], labels)
+            teacher_logits = (
+                teacher_backbone(gray) if teacher_backbone is not None else None
+            )
+            loss = _fusion_loss(
+                out,
+                labels,
+                teacher_logits,
+                criterion,
+                args.lambda_gray,
+                args.lambda_kd,
+            )
             loss.backward()
             optimizer.step()
 
-        val_acc = _evaluate_accuracy(model, val_loader, device)
-        print(f"epoch {epoch + 1}/{args.epochs} val_acc={val_acc:.4f}")
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        val_metrics = _evaluate(model, val_loader, device)
+        recalls = " ".join(
+            f"{name}={val_metrics['per_class_recall'].get(str(i), 0.0):.3f}"
+            for i, name in enumerate(class_names)
+        )
+        print(
+            f"epoch {epoch + 1}/{args.epochs} "
+            f"val_macro_f1={val_metrics['macro_f1']:.4f} "
+            f"val_acc={val_metrics['accuracy']:.4f} {recalls}"
+        )
+        # Macro-F1 primary, accuracy tiebreak (issue 8).
+        selection_key = (val_metrics["macro_f1"], val_metrics["accuracy"])
+        if selection_key > best_key:
+            best_key = selection_key
             save_fusion_checkpoint(
                 best_path,
                 model,
@@ -449,7 +582,9 @@ def run_training(args: argparse.Namespace) -> Path:
                     "phase": args.phase,
                     "init_from": str(init_checkpoint) if init_checkpoint else "",
                     "epoch": epoch + 1,
-                    "val_acc": val_acc,
+                    "val_macro_f1": val_metrics["macro_f1"],
+                    "val_acc": val_metrics["accuracy"],
+                    "per_class_recall": val_metrics["per_class_recall"],
                     "dataset_fingerprint": dataset_report.get("audit_fingerprint", ""),
                 },
             )
@@ -461,7 +596,8 @@ def run_training(args: argparse.Namespace) -> Path:
             "phase": args.phase,
             "init_from": str(init_checkpoint) if init_checkpoint else "",
             "epochs": args.epochs,
-            "best_val_acc": best_val_acc,
+            "best_val_macro_f1": best_key[0],
+            "best_val_acc": best_key[1],
             "dataset_fingerprint": dataset_report.get("audit_fingerprint", ""),
         },
     )
@@ -480,6 +616,8 @@ def run_training(args: argparse.Namespace) -> Path:
                 "epochs": args.epochs,
                 "lr": args.lr,
                 "gray_lr": args.gray_lr,
+                "lambda_gray": args.lambda_gray,
+                "lambda_kd": args.lambda_kd,
                 "seed": args.seed,
                 "device": device,
                 "version": FUSION_VERSION,
@@ -490,21 +628,6 @@ def run_training(args: argparse.Namespace) -> Path:
         encoding="utf-8",
     )
     return run_dir
-
-
-@torch.no_grad()
-def _evaluate_accuracy(model: PolarFusionModel, loader, device: str) -> float:
-    model.eval()
-    correct = 0
-    total = 0
-    for gray, polar, quality, labels in loader:
-        out = model(
-            gray.to(device), polar.to(device), quality.to(device)
-        )
-        predictions = out["final_logits"].argmax(dim=1).cpu()
-        correct += int((predictions == labels).sum())
-        total += int(labels.numel())
-    return correct / max(total, 1)
 
 
 def main(argv: list[str] | None = None) -> int:

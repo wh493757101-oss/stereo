@@ -62,6 +62,10 @@ class PolarDeltaNet(nn.Module):
             nn.Flatten(),
             nn.Linear(64, num_classes),
         )
+        # Zero-init the delta head: at training start gate * delta == 0 for
+        # every input, so the fused model is exactly the gray backbone.
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, polar: torch.Tensor) -> torch.Tensor:
         return self.net(polar)

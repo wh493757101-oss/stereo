@@ -569,6 +569,7 @@ class TestTrainingGate:
                         "--data", str(mini_dataset),
                         "--base", "definitely-missing.pt",
                         "--gray-weights", "",
+                        "--allow-untrained-gray",
                     ]
                 )
             )
@@ -676,6 +677,89 @@ class TestFusionClassifier:
         # class must remain a legal one either way.
         assert invalid_result.valid and valid_result.valid
         assert invalid_result.class_name in self.V3_NAMES
+
+
+class TestGrayPreservationTraining:
+    def test_delta_head_zero_initialized(self):
+        from models.polar_fusion import PolarDeltaNet
+
+        delta = PolarDeltaNet(num_classes=4)
+        out = delta(torch.rand(2, 3, 48, 48))
+        torch.testing.assert_close(out, torch.zeros(2, 4))
+
+    def test_classification_metrics(self):
+        metrics = tpf.classification_metrics([0, 0, 1, 1], [0, 1, 1, 1], 2)
+        assert metrics["accuracy"] == pytest.approx(0.75)
+        # class0: p=1, r=0.5 -> f1=2/3; class1: p=2/3, r=1 -> f1=0.8
+        assert metrics["macro_f1"] == pytest.approx((2.0 / 3.0 + 0.8) / 2.0)
+        assert metrics["per_class_recall"] == {"0": pytest.approx(0.5), "1": 1.0}
+
+    def test_classification_metrics_handles_absent_class(self):
+        metrics = tpf.classification_metrics([0, 0], [0, 0], 3)
+        assert metrics["accuracy"] == 1.0
+        assert metrics["per_class_recall"] == {"0": 1.0, "1": 0.0, "2": 0.0}
+        # Absent classes contribute f1=0 to the macro average.
+        assert metrics["macro_f1"] == pytest.approx(1.0 / 3.0)
+
+    def test_fusion_loss_terms(self):
+        torch.manual_seed(0)
+        out = {
+            "final_logits": torch.randn(4, 4),
+            "gray_logits": torch.randn(4, 4),
+        }
+        labels = torch.tensor([0, 1, 2, 3])
+        criterion = torch.nn.CrossEntropyLoss()
+        fusion_ce = criterion(out["final_logits"], labels)
+
+        base = tpf._fusion_loss(out, labels, None, criterion, 0.0, 1.0)
+        assert torch.isclose(base, fusion_ce)
+
+        with_gray = tpf._fusion_loss(out, labels, None, criterion, 1.0, 1.0)
+        assert torch.isclose(
+            with_gray, fusion_ce + criterion(out["gray_logits"], labels)
+        )
+
+        # Teacher identical to the gray branch -> KD term is exactly 0.
+        same = tpf._fusion_loss(
+            out, labels, out["gray_logits"].detach(), criterion, 0.0, 1.0
+        )
+        assert torch.isclose(same, fusion_ce)
+
+    def test_fresh_head_freeze_refused_without_override(
+        self, mini_dataset, monkeypatch
+    ):
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: None)
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+        with pytest.raises(ValueError, match="allow-untrained-gray"):
+            tpf.run_training(
+                tpf.parse_args(
+                    ["--run-id", "run_x", "--data", str(mini_dataset), "--gray-weights", ""]
+                )
+            )
+
+    def test_fresh_head_freeze_allowed_with_override(self, mini_dataset, monkeypatch):
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: None)
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+
+        def refuse(*a, **kw):
+            raise FileNotFoundError("prepare_gray_backbone reached")
+
+        monkeypatch.setattr(tpf, "prepare_gray_backbone", refuse)
+        # The fresh-head build needs a (locally present) base checkpoint;
+        # any existing file works since prepare is mocked.
+        stand_in = str(mini_dataset / "dataset_manifest.csv")
+        with pytest.raises(FileNotFoundError, match="prepare_gray_backbone"):
+            tpf.run_training(
+                tpf.parse_args(
+                    [
+                        "--run-id", "run_x",
+                        "--data", str(mini_dataset),
+                        "--base", stand_in,
+                        "--gray-weights", "",
+                        "--allow-untrained-gray",
+                    ]
+                )
+            )
 
 
 class TestEvalScript:
