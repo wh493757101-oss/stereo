@@ -34,6 +34,8 @@ from core.fusion_dataset import (
     load_fusion_sample,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 FUSION_VERSION = "polar_fusion_v1"
 INPUT_FORMAT = (
     "gray: (3, imgsz, imgsz) uint8-replicated left gray crop / 255; "
@@ -242,6 +244,119 @@ def build_gray_class_perm(
     return perm
 
 
+def torch_device_name(device: str) -> str:
+    """Convert an Ultralytics-style device id into a torch-compatible name.
+
+    ``resolve_device`` accepts ``"0"``/``"cuda"``/``"cuda:N"`` for
+    Ultralytics, but ``Module.to()`` rejects plain ``"0"`` with
+    ``RuntimeError: Invalid device string``; this maps to ``cuda:N``.
+    """
+    if device == "cpu":
+        return "cpu"
+    if device == "cuda":
+        return "cuda:0"
+    if device.isdigit():
+        return f"cuda:{device}"
+    if device.startswith("cuda:"):
+        return device
+    raise ValueError(f"unsupported torch device name: {device!r}")
+
+
+def _replace_cls_head(classification_model, num_classes: int) -> None:
+    """Swap the classification head's final linear for ``num_classes``.
+
+    The stock base (e.g. ``yolo26n-cls.pt``) is ImageNet-trained; without
+    this the gray backbone outputs 1000 logits and the fusion forward
+    fails on the first batch.
+    """
+    head = classification_model.model[-1]
+    old_linear = head.linear
+    head.linear = torch.nn.Linear(old_linear.in_features, num_classes)
+
+
+def architecture_name(module) -> str:
+    """Actual architecture of an Ultralytics model, e.g. ``yolov8n-cls``.
+
+    Derived from the loaded checkpoint's yaml, so the recorded base model
+    reflects what really runs (the legacy gray weights are YOLOv8, not the
+    requested YOLO26 default).
+    """
+    yaml_info = getattr(module, "yaml", None)
+    if isinstance(yaml_info, dict):
+        yaml_file = str(yaml_info.get("yaml_file", ""))
+        if yaml_file:
+            return Path(yaml_file).stem
+    return ""
+
+
+def prepare_gray_backbone(
+    base_path: Path,
+    gray_weights: str,
+    class_names: list[str],
+    device: str,
+) -> tuple[GrayBackboneAdapter, dict]:
+    """Build the fusion gray branch and align it with the dataset class order.
+
+    - ``gray_weights`` given: load the pretrained 4-class checkpoint, verify
+      its head width and derive the column permutation from its class names.
+    - ``gray_weights`` empty: build from ``base_path`` with a freshly
+      replaced ``num_classes`` head (untrained gray branch).
+    A provided-but-missing ``gray_weights`` path is an error, never a
+    silent fallback to the untrained base.
+    """
+    from ultralytics import YOLO
+
+    if gray_weights:
+        weights_path = Path(gray_weights)
+        if not weights_path.is_absolute():
+            weights_path = PROJECT_ROOT / weights_path
+        if not weights_path.is_file():
+            raise FileNotFoundError(
+                f"gray-weights checkpoint {weights_path} is missing; pass an "
+                "empty --gray-weights to explicitly start untrained (no "
+                "automatic download or fallback)"
+            )
+        module = YOLO(str(weights_path)).model
+        head_linear = module.model[-1].linear
+        if head_linear.out_features != len(class_names):
+            raise ValueError(
+                f"gray-weights head outputs {head_linear.out_features} classes "
+                f"but the dataset defines {len(class_names)}: {class_names}"
+            )
+        perm = build_gray_class_perm(module.names, class_names)
+        info = {
+            # The architecture is whatever the loaded weights carry (e.g.
+            # yolov8n-cls for the legacy run), not the requested --base.
+            "base_model": architecture_name(module) or str(weights_path.name),
+            "gray_weights": str(weights_path),
+            "head_replaced": False,
+            "perm": perm,
+            "gray_class_names": [
+                str(module.names[key]) for key in sorted(module.names)
+            ],
+        }
+    else:
+        module = YOLO(str(base_path)).model
+        _replace_cls_head(module, len(class_names))
+        # The replaced head's class order is now the dataset order.
+        module.names = {i: name for i, name in enumerate(class_names)}
+        perm = None
+        info = {
+            "base_model": architecture_name(module) or Path(str(base_path)).name,
+            "gray_weights": "",
+            "head_replaced": True,
+            "perm": None,
+            "gray_class_names": list(class_names),
+        }
+    module.to(device)
+    return GrayBackboneAdapter(module, perm=perm), info
+
+
+def _resolve_project_path(value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
 @dataclasses.dataclass(frozen=True)
 class FusionCheckpointMetadata:
     """Audit metadata for a fusion checkpoint.
@@ -388,25 +503,7 @@ class FusionClsDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index: int):
         sample = load_fusion_sample(self.sample_paths[index])
-        size = (self.imgsz, self.imgsz)
-
-        gray = self._cv2.resize(sample.gray, size, interpolation=self._cv2.INTER_AREA)
-        gray_t = torch.from_numpy(np.ascontiguousarray(gray)).float().div_(255.0)
-        gray_t = gray_t.unsqueeze(0).expand(3, -1, -1).contiguous()
-
-        polar = np.stack(
-            [sample.signed_q, sample.abs_q, sample.valid.astype(np.float32)], axis=0
-        )
-        polar_resized = np.stack(
-            [
-                self._cv2.resize(polar[c], size, interpolation=self._cv2.INTER_LINEAR)
-                for c in range(3)
-            ],
-            axis=0,
-        )
-        polar_t = torch.from_numpy(np.ascontiguousarray(polar_resized)).float()
-
-        quality_t = torch.from_numpy(np.asarray(sample.quality, dtype=np.float32))
+        gray_t, polar_t, quality_t = _fusion_tensors(sample, self.imgsz, self._cv2)
         return gray_t, polar_t, quality_t, int(sample.class_id)
 
 
@@ -439,3 +536,143 @@ def class_names_from_manifest(dataset_root: str | Path) -> list[str]:
     for row in rows:
         by_id.setdefault(int(row["class_id"]), row["class_name"])
     return [by_id[key] for key in sorted(by_id)]
+
+
+def rebuild_gray_backbone(
+    metadata: FusionCheckpointMetadata,
+    device: str,
+) -> GrayBackboneAdapter:
+    """Rebuild the gray branch exactly as recorded in fusion metadata.
+
+    Fresh-head checkpoints are rebuilt from their recorded base checkpoint;
+    gray-weights checkpoints from their recorded pretrained weights (which
+    carry the real architecture, possibly different from ``base_model``).
+    """
+    class_names = list(metadata.class_names)
+    if metadata.head_replaced:
+        base_path = _resolve_project_path(metadata.base_model)
+        if not base_path.is_file():
+            raise FileNotFoundError(
+                f"base checkpoint {base_path} (recorded in the fusion "
+                "checkpoint) is missing; no automatic download"
+            )
+        backbone, _ = prepare_gray_backbone(base_path, "", class_names, device)
+    else:
+        backbone, _ = prepare_gray_backbone(
+            _resolve_project_path(metadata.base_model),
+            metadata.gray_weights,
+            class_names,
+            device,
+        )
+    return backbone
+
+
+def _fusion_tensors(sample, imgsz: int, cv2) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Resize/normalize one fusion sample into model input tensors.
+
+    Shared by :class:`FusionClsDataset` and :class:`FusionClassifier` so
+    training and inference preprocess identically.
+    """
+    size = (imgsz, imgsz)
+    gray = cv2.resize(sample.gray, size, interpolation=cv2.INTER_AREA)
+    gray_t = torch.from_numpy(np.ascontiguousarray(gray)).float().div_(255.0)
+    gray_t = gray_t.unsqueeze(0).expand(3, -1, -1).contiguous()
+
+    polar = np.stack(
+        [sample.signed_q, sample.abs_q, sample.valid.astype(np.float32)], axis=0
+    )
+    polar = np.stack(
+        [cv2.resize(polar[c], size, interpolation=cv2.INTER_LINEAR) for c in range(3)],
+        axis=0,
+    )
+    polar_t = torch.from_numpy(np.ascontiguousarray(polar)).float()
+    quality_t = torch.from_numpy(np.asarray(sample.quality, dtype=np.float32))
+    return gray_t, polar_t, quality_t
+
+
+@dataclasses.dataclass(frozen=True)
+class FusionSampleInput:
+    """Per-instance fusion inputs at inference time.
+
+    Mirrors the npz sample contract: ``gray`` is the uint8 left crop,
+    ``signed_q``/``abs_q``/``valid`` the polar crops (same shape as gray)
+    and ``quality`` the (4,) float32 quality vector. ``polar_invalid``
+    forces the gate to 0 (sync skew exceeded / stereo matching failed).
+    """
+
+    gray: np.ndarray
+    signed_q: np.ndarray
+    abs_q: np.ndarray
+    valid: np.ndarray
+    quality: np.ndarray
+    polar_invalid: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class FusionClassResult:
+    """One classification result; ``valid=False`` marks a skipped sample."""
+
+    class_id: int
+    class_name: str
+    confidence: float
+    valid: bool
+
+
+class FusionClassifier:
+    """Batch inference wrapper over a trained fusion checkpoint.
+
+    Loads the checkpoint, rebuilds the gray branch exactly as recorded
+    (architecture, gray weights, head replacement, class permutation) and
+    exposes a ``predict_batch``-style interface for the inference engine.
+    Never trains and never downloads weights.
+    """
+
+    def __init__(self, checkpoint: str | Path, device: str = "cpu"):
+        self.device = torch_device_name(device)
+        self.metadata = read_fusion_metadata(checkpoint)
+        backbone = rebuild_gray_backbone(self.metadata, device)
+        self.model, self.metadata, _ = load_fusion_checkpoint(checkpoint, backbone)
+        self.model.to(device).eval()
+        self.class_names = list(self.metadata.class_names)
+        self.imgsz = int(self.metadata.imgsz)
+
+    @torch.no_grad()
+    def predict_batch(
+        self, samples: Sequence[FusionSampleInput | None]
+    ) -> list[FusionClassResult]:
+        """Classify fusion samples; ``None`` entries yield invalid results."""
+        usable = [
+            i for i, s in enumerate(samples)
+            if s is not None and s.gray.size > 0
+        ]
+        results = [FusionClassResult(-1, "", 0.0, False) for _ in samples]
+        if not usable:
+            return results
+
+        import cv2
+
+        grays, polars, qualities, invalid_flags = [], [], [], []
+        for i in usable:
+            sample = samples[i]
+            gray_t, polar_t, quality_t = _fusion_tensors(sample, self.imgsz, cv2)
+            grays.append(gray_t)
+            polars.append(polar_t)
+            qualities.append(quality_t)
+            invalid_flags.append(bool(sample.polar_invalid))
+
+        gray_t = torch.stack(grays).to(self.device)
+        polar_t = torch.stack(polars).to(self.device)
+        quality_t = torch.stack(qualities).to(self.device)
+        polar_invalid_t = torch.tensor(invalid_flags, device=self.device)
+        out = self.model(gray_t, polar_t, quality_t, polar_invalid=polar_invalid_t)
+        probs = torch.softmax(out["final_logits"], dim=-1)
+        confidences, class_ids = probs.max(dim=-1)
+        for pos, i in enumerate(usable):
+            class_id = int(class_ids[pos])
+            results[i] = FusionClassResult(
+                class_id=class_id,
+                class_name=self.class_names[class_id],
+                confidence=float(confidences[pos]),
+                valid=True,
+            )
+        return results

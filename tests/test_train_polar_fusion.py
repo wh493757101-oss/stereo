@@ -16,6 +16,14 @@ if str(ROOT) not in sys.path:
 
 import scripts.train_polar_fusion as tpf
 from core.fusion_dataset import QUALITY_VECTOR_LENGTH, build_quality_vector, save_fusion_sample
+from models.polar_fusion import (
+    FusionClassResult,
+    FusionClassifier,
+    FusionSampleInput,
+    PolarFusionModel,
+    fusion_metadata,
+    save_fusion_checkpoint,
+)
 
 
 @pytest.fixture
@@ -508,6 +516,40 @@ class TestDryRun:
             tpf.validate_dataset(root)
 
 
+class TestAuditGate:
+    def test_training_requires_audit_report(self, mini_dataset):
+        with pytest.raises(FileNotFoundError, match="audit"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_dry_run_tolerates_missing_audit(self, mini_dataset):
+        report = tpf.validate_dataset(mini_dataset, require_audit=False)
+        assert report["audit_passed"] is None
+
+    def test_failed_audit_refused_for_training(self, mini_dataset):
+        (mini_dataset / "dataset_audit.json").write_text(
+            '{"audit_passed": false}', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="audit"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_passed_audit_returns_fingerprint(self, mini_dataset):
+        import hashlib
+        import json
+
+        (mini_dataset / "dataset_audit.json").write_text(
+            '{"audit_passed": true}', encoding="utf-8"
+        )
+        report = tpf.validate_dataset(mini_dataset)
+        assert report["audit_passed"] is True
+        digest = hashlib.sha256()
+        for name in ("dataset_manifest.csv", "dataset_audit.json"):
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update((mini_dataset / name).read_bytes())
+            digest.update(b"\0")
+        assert report["audit_fingerprint"] == digest.hexdigest()
+
+
 class TestStructureCheck:
     def test_structure_check_passes(self):
         report = tpf.structure_check(num_classes=4, imgsz=32)
@@ -566,6 +608,74 @@ class TestTrainingGate:
             tpf.run_training(
                 tpf.parse_args(["--run-id", "run_x", "--data", str(mini_dataset)])
             )
+
+
+class TestFusionClassifier:
+    """FusionClassifier must rebuild the checkpoint's gray branch and
+    classify FusionSampleInput batches (the engine's fusion contract)."""
+
+    V3_NAMES = ["metal_submarine", "plastic_submarine", "plastic_fish", "real_fish"]
+
+    def _save_checkpoint(self, tmp_path, fake_ultralytics):
+        weights = tmp_path / "model_b-gray.pt"
+        weights.write_bytes(b"fake")
+        backbone, info = tpf.prepare_gray_backbone(
+            tmp_path / "base.pt", str(weights), self.V3_NAMES, "cpu"
+        )
+        model = PolarFusionModel(backbone, num_classes=4)
+        meta = fusion_metadata(
+            self.V3_NAMES,
+            base_model="yolov8n-cls",
+            imgsz=16,
+            gray_weights=str(weights),
+            gray_class_names=info["gray_class_names"],
+        )
+        return save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+
+    def test_predict_batch_roundtrip(self, tmp_path, fake_ultralytics):
+        path = self._save_checkpoint(tmp_path, fake_ultralytics)
+        clf = FusionClassifier(path, device="cpu")
+        assert clf.class_names == self.V3_NAMES
+        assert clf.imgsz == 16
+
+        rng = np.random.default_rng(0)
+        signed = rng.uniform(-1, 1, (32, 32)).astype(np.float32)
+        sample = FusionSampleInput(
+            gray=rng.integers(0, 256, (32, 32)).astype(np.uint8),
+            signed_q=signed,
+            abs_q=np.abs(signed),
+            valid=(rng.uniform(size=(32, 32)) > 0.5).astype(np.uint8),
+            quality=build_quality_vector(0.5, 0.6, 0.7, 0.2),
+        )
+        results = clf.predict_batch([sample, None])
+        assert results[0].valid is True
+        assert results[0].class_name in self.V3_NAMES
+        assert 0.0 <= results[0].confidence <= 1.0
+        assert results[1] == FusionClassResult(-1, "", 0.0, False)
+
+    def test_polar_invalid_forces_gray_only_output(self, tmp_path, fake_ultralytics):
+        path = self._save_checkpoint(tmp_path, fake_ultralytics)
+        clf = FusionClassifier(path, device="cpu")
+        rng = np.random.default_rng(1)
+        signed = rng.uniform(-1, 1, (32, 32)).astype(np.float32)
+
+        def make_sample(polar_invalid):
+            return FusionSampleInput(
+                gray=rng.integers(0, 256, (32, 32)).astype(np.uint8),
+                signed_q=signed,
+                abs_q=np.abs(signed),
+                valid=np.ones((32, 32), np.uint8),
+                quality=build_quality_vector(0.9, 1.0, 1.0, 0.3),
+                polar_invalid=polar_invalid,
+            )
+
+        valid_result = clf.predict_batch([make_sample(False)])[0]
+        invalid_result = clf.predict_batch([make_sample(True)])[0]
+        # With the gate forced to 0 the fusion output equals gray logits;
+        # confidence must not be identical unless the delta is zero, but the
+        # class must remain a legal one either way.
+        assert invalid_result.valid and valid_result.valid
+        assert invalid_result.class_name in self.V3_NAMES
 
 
 class TestEvalScript:

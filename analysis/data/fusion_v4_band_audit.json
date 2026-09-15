@@ -1,5 +1,5 @@
 {
-  "output_root": "D:/Python/Project/my_data/datasets/underwater_cls_fusion_v3",
+  "output_root": "D:/Python/Project/my_data/datasets/underwater_cls_fusion_v4_band",
   "npz_fields": [
     "gray",
     "signed_q",
@@ -67,16 +67,16 @@
   "invalid_pixel_nonzero_failures": [],
   "saturated_left_band_failures": [],
   "value_range_failures": [],
-  "saturated_valid_pixels": 5821,
+  "saturated_valid_pixels": 5893,
   "polar_valid_ratio": {
-    "mean": 0.23119352210341365,
+    "mean": 0.23030185683232735,
     "min": 0.0,
-    "max": 0.5442307692307692
+    "max": 0.5401098901098901
   },
   "mean_abs_q_valid_pixels": {
-    "mean": 0.09154159715070606
+    "mean": 0.09090008915673184
   },
   "previews_written": 8,
-  "stereo_valid_samples": 2693,
+  "stereo_valid_samples": 2689,
   "audit_passed": true
 }

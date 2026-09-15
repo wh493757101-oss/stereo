@@ -41,6 +41,24 @@ QUALITY_VECTOR_KEYS = (
 QUALITY_VECTOR_LENGTH = len(QUALITY_VECTOR_KEYS)
 
 
+def dataset_fingerprint(data_root: str | Path) -> str:
+    """Stable sha256 over the manifest and the audit report.
+
+    Training runs record this so a checkpoint can be traced back to the
+    exact dataset state it was trained on.
+    """
+    import hashlib
+
+    data_root = Path(data_root)
+    digest = hashlib.sha256()
+    for name in ("dataset_manifest.csv", "dataset_audit.json"):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((data_root / name).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 @dataclasses.dataclass(frozen=True)
 class FusionSampleArrays:
     """Validated in-memory form of one fusion ``.npz`` sample."""

@@ -410,6 +410,79 @@ class TestBuildFusionDataset:
             )
 
 
+class TestBandMatchingMode:
+    def test_bands_mode_matches_inference_pipeline(self, tmp_path, synthetic_source):
+        """--matching bands must produce the same sample set as the full
+        mode (same labels), using build_horizontal_bands + compute_bands."""
+        from core.stereo_matching import build_horizontal_bands
+
+        output = tmp_path / "fusion_v4_band"
+        records = build_fusion_dataset(
+            source_root=synthetic_source,
+            output_root=output,
+            matcher=small_matcher(),
+            clean=True,
+            matching="bands",
+            band_margin=20,
+            full_image_threshold=0.9,
+        )
+        assert len(records) == 2
+        assert records[0].npz_path == "train/plastic_fish/groupA_000_obj000.npz"
+        sample = load_fusion_sample(output / records[0].npz_path)
+        assert sample.gray.shape == sample.abs_q.shape
+
+        # The band result must come from compute_bands, not a dense pass:
+        # recompute with the same band pipeline and compare the disparity
+        # restricted to the object band.
+        import cv2
+
+        left = cv2.imread(
+            str(tmp_path / "Rectified_v2" / "groupA" / "left" / "000.png"),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        right = cv2.imread(
+            str(tmp_path / "Rectified_v2" / "groupA" / "right" / "000.png"),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        matcher = small_matcher()
+        bands = build_horizontal_bands([(16, 40, 80, 80)], left.shape[0], 20)
+        band_result = matcher.compute_bands(left, right, bands, full_image_threshold=0.9)
+        mask = np.zeros(left.shape, dtype=np.uint8)
+        mask[40:81, 16:81] = 1
+        expected = compute_polar_features(
+            left, right, band_result.disparity, object_mask=mask, disparity_valid=band_result.valid
+        )
+        y1, y2, x1, x2 = 30, 90, 6, 90
+        np.testing.assert_allclose(
+            sample.abs_q, expected.abs_q[y1:y2, x1:x2], rtol=1e-5
+        )
+
+    def test_band_recorded_in_generation_params(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v4_band"
+        build_fusion_dataset(
+            source_root=synthetic_source,
+            output_root=output,
+            matcher=small_matcher(),
+            clean=True,
+            matching="bands",
+            band_margin=20,
+            full_image_threshold=0.9,
+        )
+        summary = json.loads((output / "dataset_summary.json").read_text(encoding="utf-8"))
+        assert summary["generation"]["matching"] == "bands"
+        assert summary["generation"]["band_margin"] == 20
+        assert summary["generation"]["full_image_threshold"] == 0.9
+
+    def test_unknown_matching_mode_rejected(self, tmp_path, synthetic_source):
+        with pytest.raises(ValueError, match="matching"):
+            build_fusion_dataset(
+                source_root=synthetic_source,
+                output_root=tmp_path / "x",
+                matcher=small_matcher(),
+                matching="dense",
+            )
+
+
 class TestAudit:
     def make_records(self, records_spec):
         return [
@@ -541,7 +614,7 @@ class TestAudit:
         abs_q = np.zeros((4, 8), np.float32)
         abs_q[1, 5] = 1.0  # isolated saturated valid pixel, not a column band
         save_fusion_sample(
-            tmp_path / "ok.npz",
+            tmp_path / "train" / "class_0" / "s0.npz",
             gray=gray,
             signed_q=abs_q.copy(),
             abs_q=abs_q,
@@ -549,7 +622,7 @@ class TestAudit:
             quality=build_quality_vector(1, 1, 1, 1),
             class_id=0,
         )
-        records = self.make_records([("train", "g", 0, "ok.npz")])
+        records = self.make_records([("train", "g", 0, "train/class_0/s0.npz")])
         audit = audit_fusion_dataset(
             output_root=tmp_path,
             records=records,
@@ -560,6 +633,138 @@ class TestAudit:
         assert audit["saturated_left_band_failures"] == []
         assert audit["saturated_valid_pixels"] == 1
         assert audit["audit_passed"] is True
+
+    def test_audit_writes_report_into_dataset_root(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        audit_fusion_dataset(
+            output_root=output,
+            records=records,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert (output / "dataset_audit.json").is_file()
+        in_root = json.loads((output / "dataset_audit.json").read_text(encoding="utf-8"))
+        assert in_root["audit_passed"] is True
+
+    def test_audit_flags_value_range_violations(self, tmp_path):
+        gray = np.full((4, 4), 100, np.uint8)
+        # abs_q inconsistent with |signed_q| on valid pixels.
+        signed = np.full((4, 4), 0.5, np.float32)
+        abs_q = np.full((4, 4), 0.2, np.float32)
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "bad_abs.npz",
+            gray=gray,
+            signed_q=signed,
+            abs_q=abs_q,
+            valid=np.ones((4, 4), np.uint8),
+            quality=build_quality_vector(1, 1, 1, 0.2),
+            class_id=0,
+        )
+        # valid mask holding a value that is neither 0 nor 1.
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "bad_valid.npz",
+            gray=gray,
+            signed_q=np.zeros((4, 4), np.float32),
+            abs_q=np.zeros((4, 4), np.float32),
+            valid=np.full((4, 4), 2, np.uint8),
+            quality=build_quality_vector(1, 1, 1, 0),
+            class_id=0,
+        )
+        records = self.make_records(
+            [
+                ("train", "g", 0, "train/class_0/bad_abs.npz"),
+                ("train", "g", 0, "train/class_0/bad_valid.npz"),
+            ]
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert len(audit["value_range_failures"]) == 2
+        assert any("abs_q" in failure for failure in audit["value_range_failures"])
+        assert any("0/1" in failure for failure in audit["value_range_failures"])
+        assert audit["audit_passed"] is False
+
+    def test_audit_flags_duplicate_rows_and_orphans(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        # An npz on disk that the manifest does not reference.
+        (output / "val" / "plastic_fish" / "orphan.npz").write_bytes(b"junk")
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=records,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["orphan_npz_files"] == ["val/plastic_fish/orphan.npz"]
+        assert audit["audit_passed"] is False
+
+        duplicated = list(records) + [records[0]]
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=duplicated,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["duplicate_manifest_rows"]
+        assert audit["audit_passed"] is False
+
+    def test_audit_flags_class_order_and_quality_mismatch(self, tmp_path, synthetic_source):
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        # class_names passed in an order that contradicts the manifest ids.
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=records,
+            class_names=["plastic_fish", "metal_submarine"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["class_order_mismatches"]
+        assert audit["audit_passed"] is False
+
+        # quality[0] (valid_ratio) must equal the manifest polar_valid_ratio.
+        swapped = [
+            FusionSampleRecord(
+                sample_name=r.sample_name,
+                split=r.split,
+                group_name=r.group_name,
+                class_id=r.class_id,
+                class_name=r.class_name,
+                source_frame=r.source_frame,
+                object_index=r.object_index,
+                stereo_valid=r.stereo_valid,
+                stereo_reason=r.stereo_reason,
+                stereo_valid_ratio=r.stereo_valid_ratio,
+                disparity=r.disparity,
+                polar_valid_ratio=0.123456,
+                quality=r.quality,
+                npz_path=r.npz_path,
+            )
+            for r in records
+        ]
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=swapped,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["quality_consistency_failures"]
+        assert audit["audit_passed"] is False
 
     def test_records_roundtrip_through_manifest(self, tmp_path, synthetic_source):
         from scripts.prepare_cls_fusion_dataset import records_from_manifest

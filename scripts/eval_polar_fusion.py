@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from collections import Counter
@@ -37,8 +38,9 @@ from models.polar_fusion import (
     load_fusion_checkpoint,
     read_fusion_metadata,
     read_manifest_split,
+    rebuild_gray_backbone,
 )
-from scripts.train_polar_fusion import prepare_gray_backbone, torch_device_name
+from scripts.train_polar_fusion import torch_device_name
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -139,40 +141,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"unsupported --device {args.device!r}: {exc}", file=sys.stderr)
         return 2
     metadata = read_fusion_metadata(checkpoint)
+    if args.base:
+        # --base overrides the recorded base checkpoint (fresh-head builds).
+        metadata = dataclasses.replace(metadata, base_model=args.base)
 
     # Rebuild the gray branch exactly as recorded: fresh-head checkpoints
-    # need the base checkpoint they were built from, gray-weights
-    # checkpoints need their recorded pretrained weights (which carry the
-    # real architecture, possibly different from base_model).
-    base_name = args.base or metadata.base_model
-    base_path = Path(base_name)
-    if not base_path.is_absolute():
-        base_path = PROJECT_ROOT / base_name
-    if metadata.head_replaced:
-        if not base_path.is_file():
-            print(
-                f"gray backbone base checkpoint {base_path} (recorded in the "
-                "fusion checkpoint) is missing; evaluation requires it "
-                "locally (no automatic download).",
-                file=sys.stderr,
-            )
-            return 2
-        gray_weights_arg = ""
-    else:
-        gray_weights_arg = metadata.gray_weights
-        gray_path = Path(gray_weights_arg)
-        gray_path = gray_path if gray_path.is_absolute() else PROJECT_ROOT / gray_path
-        if not gray_path.is_file():
-            print(
-                f"gray branch weights {gray_path} (recorded in the checkpoint) "
-                "are missing; evaluation requires them locally.",
-                file=sys.stderr,
-            )
-            return 2
-
-    backbone, _ = prepare_gray_backbone(
-        base_path, gray_weights_arg, list(metadata.class_names), device
-    )
+    # need their base checkpoint, gray-weights checkpoints their recorded
+    # pretrained weights (which carry the real architecture).
+    try:
+        backbone = rebuild_gray_backbone(metadata, device)
+    except FileNotFoundError as exc:
+        print(f"evaluation refused: {exc}", file=sys.stderr)
+        return 2
     model, metadata, _ = load_fusion_checkpoint(checkpoint, backbone)
     model = model.to(device)
 
@@ -192,7 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     result.update(
         {
             "checkpoint": str(checkpoint),
-            "base_model": str(base_path),
+            "base_model": metadata.base_model,
+            "gray_weights": metadata.gray_weights,
+            "head_replaced": metadata.head_replaced,
             "split": args.split,
             "version": metadata.version,
             "class_names": list(metadata.class_names),

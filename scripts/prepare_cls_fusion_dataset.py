@@ -49,13 +49,19 @@ from core.fusion_dataset import (
     save_fusion_sample,
 )
 from core.polar_compute import compute_polar_features
-from core.stereo_matching import StereoMatcher, StereoMatcherConfig, to_gray_u8
+from core.stereo_matching import (
+    StereoMatcher,
+    StereoMatcherConfig,
+    build_horizontal_bands,
+    to_gray_u8,
+)
 from scripts.make_polar_dataset import make_crop_window, read_yolo_polygons
 
 SPLIT_NAMES = ("train", "val", "test")
 EXPECTED_SPLIT_COUNTS = {"train": 2078, "val": 368, "test": 362}
 EXPECTED_TOTAL = 2808
 PREVIEW_PER_CLASS = 2
+MATCHING_MODES = ("full", "bands")
 
 
 @dataclass(frozen=True)
@@ -115,6 +121,33 @@ def parse_args() -> argparse.Namespace:
         "--audit-only",
         action="store_true",
         help="Skip generation; audit the existing output from its manifest.",
+    )
+    parser.add_argument(
+        "--audit-stem",
+        default="fusion_v3",
+        help="Stem for the audit report/preview names under --audit-root "
+        "(writes <stem>_audit.json and <stem>_preview/).",
+    )
+    parser.add_argument(
+        "--matching",
+        choices=MATCHING_MODES,
+        default="full",
+        help="full: one dense pass per pair (V3). bands: band-restricted "
+        "matching identical to online inference (V4).",
+    )
+    parser.add_argument(
+        "--band-margin",
+        type=int,
+        default=20,
+        help="Vertical margin around instance bboxes when building bands "
+        "(--matching bands, mirrors stereo.band_margin in configs/default.yaml).",
+    )
+    parser.add_argument(
+        "--full-image-threshold",
+        type=float,
+        default=0.9,
+        help="Band coverage ratio above which a full-image pass is used "
+        "(--matching bands, mirrors the inference engine).",
     )
     parser.add_argument(
         "--sgbm-mode",
@@ -181,6 +214,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.crop_pad < 0:
         parser.error("--crop-pad must be non-negative")
+    if args.band_margin < 0:
+        parser.error("--band-margin must be non-negative")
     return args
 
 
@@ -291,8 +326,21 @@ def build_fusion_dataset(
     crop_pad: int = 10,
     clean: bool = False,
     workspace: Path | None = None,
+    matching: str = "full",
+    band_margin: int = 20,
+    full_image_threshold: float = 0.9,
 ) -> list[FusionSampleRecord]:
-    """Generate all V3 npz samples; returns one record per sample."""
+    """Generate all fusion npz samples; returns one record per sample.
+
+    ``matching="full"`` runs one dense SGBM pass per pair (V3).
+    ``matching="bands"`` builds horizontal bands from all ground-truth
+    bboxes of the frame exactly like online inference
+    (:func:`core.stereo_matching.build_horizontal_bands` ->
+    :meth:`StereoMatcher.compute_bands`) so training and inference see the
+    same disparity distribution (V4).
+    """
+    if matching not in MATCHING_MODES:
+        raise ValueError(f"unknown matching mode: {matching!r}")
     workspace = workspace if workspace is not None else Path.cwd()
     source_root = Path(source_root)
     output_root = Path(output_root)
@@ -317,9 +365,22 @@ def build_fusion_dataset(
         if not polygons:
             continue
         right_gray = load_gray(row.right_path)
-        # Exactly one dense matching pass per stereo pair; every object below
-        # reuses this single per-pixel disparity map.
-        result = matcher.compute(left_gray, right_gray)
+        if matching == "bands":
+            bboxes = []
+            for annotation in polygons:
+                xs = [x for x, _ in annotation.polygon]
+                ys = [y for _, y in annotation.polygon]
+                bboxes.append((min(xs), min(ys), max(xs), max(ys)))
+            bands = build_horizontal_bands(bboxes, height, vertical_margin=band_margin)
+            # One band-restricted pass per pair; empty bands are skipped
+            # inside compute_bands without running SGBM.
+            result = matcher.compute_bands(
+                left_gray, right_gray, bands, full_image_threshold=full_image_threshold
+            )
+        else:
+            # Exactly one dense matching pass per stereo pair; every object
+            # below reuses this single per-pixel disparity map.
+            result = matcher.compute(left_gray, right_gray)
 
         for object_index, annotation in enumerate(polygons):
             if not 0 <= annotation.class_id < len(class_names):
@@ -395,7 +456,17 @@ def build_fusion_dataset(
                 )
             )
 
-    write_manifest(output_root, class_names, records)
+    write_manifest(
+        output_root,
+        class_names,
+        records,
+        generation={
+            "matching": matching,
+            "band_margin": band_margin if matching == "bands" else None,
+            "full_image_threshold": full_image_threshold if matching == "bands" else None,
+            "crop_pad": crop_pad,
+        },
+    )
     return records
 
 
@@ -442,6 +513,7 @@ def write_manifest(
     output_root: Path,
     class_names: list[str],
     records: list[FusionSampleRecord],
+    generation: dict | None = None,
 ) -> None:
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=list(MANIFEST_FIELDS))
@@ -460,29 +532,38 @@ def write_manifest(
             for split in SPLIT_NAMES
         },
         "total_samples": len(records),
+        "generation": generation or {},
     }
     (output_root / "dataset_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
 
-def _has_saturated_left_band(sample, region: float = 0.25, fraction: float = 0.9) -> bool:
+def _has_saturated_left_band(
+    sample, region: float = 0.25, fraction: float = 0.9, min_column_valid: float = 0.1
+) -> bool:
     """Detect the out-of-bounds saturation signature in one sample.
 
     The legacy bug produced polar=1.0 for every crop column left of the
     object disparity (right-view sample outside the image). Signature: a
     column in the left ``region`` of the crop where at least ``fraction``
-    of the valid pixels are saturated (abs_q >= 0.999).
+    of the valid pixels are saturated (abs_q >= 0.999). Columns must hold
+    at least ``max(4, min_column_valid * height)`` valid pixels: sparse
+    occlusion-boundary columns can be 100% saturated with only a handful
+    of valid pixels (physically real extreme ratios), while the bug
+    saturated whole well-populated columns.
     """
     valid = sample.valid > 0
     saturated = valid & (sample.abs_q >= 0.999)
-    width = sample.valid.shape[1]
+    height, width = sample.valid.shape
     edge_columns = max(1, int(width * region))
+    density_threshold = max(4, int(height * min_column_valid))
     region_valid = valid[:, :edge_columns]
     region_saturated = saturated[:, :edge_columns]
     column_valid = region_valid.sum(axis=0)
     column_saturated = region_saturated.sum(axis=0)
-    bad_columns = (column_valid > 0) & (column_saturated >= fraction * column_valid)
+    dense = column_valid >= density_threshold
+    bad_columns = dense & (column_saturated >= fraction * column_valid)
     return bool(bad_columns.any())
 
 
@@ -517,18 +598,83 @@ def records_from_manifest(output_root: Path) -> list[FusionSampleRecord]:
     return records
 
 
+def _check_sample_values(sample) -> str | None:
+    """Numeric invariants of one decoded sample; None when all hold."""
+    if not bool(np.isin(sample.valid, (0, 1)).all()):
+        return "valid mask values are not strictly 0/1"
+    if sample.signed_q.min() < -1.0 or sample.signed_q.max() > 1.0:
+        return "signed_q outside [-1, 1]"
+    if sample.abs_q.min() < 0.0 or sample.abs_q.max() > 1.0:
+        return "abs_q outside [0, 1]"
+    valid = sample.valid > 0
+    if valid.any() and not np.allclose(
+        sample.abs_q[valid], np.abs(sample.signed_q[valid]), atol=1e-5
+    ):
+        return "abs_q != |signed_q| on valid pixels"
+    return None
+
+
+def _check_manifest_consistency(
+    output_root: Path,
+    records: list[FusionSampleRecord],
+    class_names: list[str],
+) -> dict[str, list[str]]:
+    """Manifest-level integrity checks (ids, duplicates, files, layout)."""
+    failures: dict[str, list[str]] = {
+        "class_order_mismatches": [],
+        "duplicate_manifest_rows": [],
+        "unknown_splits": [],
+        "path_layout_mismatches": [],
+        "missing_files": [],
+        "quality_consistency_failures": [],
+    }
+    seen_names: set[str] = set()
+    seen_paths: set[str] = set()
+    for record in records:
+        label = f"{record.sample_name}(id={record.class_id},name={record.class_name})"
+        if not 0 <= record.class_id < len(class_names):
+            failures["class_order_mismatches"].append(label)
+        elif class_names[record.class_id] != record.class_name:
+            failures["class_order_mismatches"].append(label)
+        if record.sample_name in seen_names or record.npz_path in seen_paths:
+            failures["duplicate_manifest_rows"].append(record.sample_name)
+        seen_names.add(record.sample_name)
+        seen_paths.add(record.npz_path)
+        if record.split not in SPLIT_NAMES:
+            failures["unknown_splits"].append(record.npz_path)
+        expected_layout = f"{record.split}/{record.class_name}/{record.sample_name}.npz"
+        if record.npz_path != expected_layout:
+            failures["path_layout_mismatches"].append(record.npz_path)
+        if not (output_root / record.npz_path).is_file():
+            failures["missing_files"].append(record.npz_path)
+        quality = record.quality
+        # Tolerance 1.5e-6: the manifest stores 6-decimal text while the
+        # npz quality vector is float32; a value ending in 5 at the 7th
+        # digit can round the two representations apart by one unit.
+        if (
+            len(quality) != len(QUALITY_VECTOR_KEYS)
+            or any(not 0.0 <= v <= 1.0 for v in quality)
+            or abs(quality[0] - record.polar_valid_ratio) > 1.5e-6
+        ):
+            failures["quality_consistency_failures"].append(record.npz_path)
+    return {key: value[:50] for key, value in failures.items()}
+
+
 def audit_fusion_dataset(
     output_root: Path,
     records: list[FusionSampleRecord],
     class_names: list[str],
     audit_root: Path,
     expected_splits: dict[str, int] | None = EXPECTED_SPLIT_COUNTS,
+    audit_stem: str = "fusion_v3",
 ) -> dict:
     """Decode-check every sample and verify dataset invariants.
 
-    Returns the audit dict; also writes fusion_v3_audit.json and preview
-    PNGs under ``audit_root``. ``expected_splits`` is the required
-    per-split sample count (None skips the count gate).
+    Returns the audit dict; also writes ``<stem>_audit.json`` under
+    ``audit_root`` and a copy as ``dataset_audit.json`` inside the dataset
+    root (the file the training gate requires), plus preview PNGs.
+    ``expected_splits`` is the required per-split sample count (None skips
+    the count gate).
     """
     output_root = Path(output_root)
     audit_root = Path(audit_root)
@@ -564,15 +710,27 @@ def audit_fusion_dataset(
     }
     audit["group_split_leakage"] = leakage
 
+    manifest_failures = _check_manifest_consistency(output_root, records, class_names)
+    audit.update(manifest_failures)
+
+    # Any npz on disk that the manifest does not reference.
+    referenced = {r.npz_path for r in records}
+    audit["orphan_npz_files"] = sorted(
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("*.npz")
+        if path.relative_to(output_root).as_posix() not in referenced
+    )[:50]
+
     decode_failures: list[str] = []
     invalid_nonzero_failures: list[str] = []
     saturated_band_failures: list[str] = []
+    value_range_failures: list[str] = []
     polar_valid_ratios: list[float] = []
     mean_abs_q: list[float] = []
     saturated_valid_pixels = 0
     previews_written = 0
 
-    preview_dir = audit_root / "fusion_v3_preview"
+    preview_dir = audit_root / f"{audit_stem}_preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview_budget = {name: PREVIEW_PER_CLASS for name in class_names}
 
@@ -588,6 +746,11 @@ def audit_fusion_dataset(
             decode_failures.append(
                 f"{record.npz_path}: class_id {sample.class_id} != {record.class_id}"
             )
+            continue
+
+        failure = _check_sample_values(sample)
+        if failure is not None:
+            value_range_failures.append(f"{record.npz_path}: {failure}")
             continue
 
         valid = sample.valid > 0
@@ -614,10 +777,11 @@ def audit_fusion_dataset(
             _write_preview(preview_dir, record, sample)
             previews_written += 1
 
-    audit["decoded_samples"] = total - len(decode_failures)
+    audit["decoded_samples"] = total - len(decode_failures) - len(value_range_failures)
     audit["decode_failures"] = decode_failures[:50]
     audit["invalid_pixel_nonzero_failures"] = invalid_nonzero_failures[:50]
     audit["saturated_left_band_failures"] = saturated_band_failures[:50]
+    audit["value_range_failures"] = value_range_failures[:50]
     audit["saturated_valid_pixels"] = saturated_valid_pixels
     audit["polar_valid_ratio"] = {
         "mean": float(np.mean(polar_valid_ratios)) if polar_valid_ratios else 0.0,
@@ -633,15 +797,20 @@ def audit_fusion_dataset(
         not decode_failures
         and not invalid_nonzero_failures
         and not saturated_band_failures
+        and not value_range_failures
+        and not any(manifest_failures.values())
+        and not audit["orphan_npz_files"]
         and not leakage
         and audit["count_match_expected"]
     )
 
-    audit_path = audit_root / "fusion_v3_audit.json"
+    audit_path = audit_root / f"{audit_stem}_audit.json"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
-    audit_path.write_text(
-        json.dumps(audit, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    audit_text = json.dumps(audit, ensure_ascii=False, indent=2) + "\n"
+    audit_path.write_text(audit_text, encoding="utf-8")
+    # The training gate reads the audit from inside the dataset root, so a
+    # dataset always travels with its own verification verdict.
+    (output_root / "dataset_audit.json").write_text(audit_text, encoding="utf-8")
     return audit
 
 
@@ -666,15 +835,21 @@ def main() -> None:
     output_root = Path(args.output)
     if args.audit_only:
         records = records_from_manifest(output_root)
+        # Class names must follow the manifest's class-id order (data.yaml
+        # order), not alphabetical, or the class-order audit check fails.
+        by_id: dict[int, str] = {}
+        for record in records:
+            by_id.setdefault(record.class_id, record.class_name)
         audit = audit_fusion_dataset(
             output_root=output_root,
             records=records,
-            class_names=sorted({r.class_name for r in records}),
+            class_names=[by_id[key] for key in sorted(by_id)],
             audit_root=Path(args.audit_root),
+            audit_stem=args.audit_stem,
         )
         print(f"Samples: {len(records)}")
         print(f"Audit passed: {audit['audit_passed']}")
-        print(f"Audit report: {(Path(args.audit_root) / 'fusion_v3_audit.json').resolve()}")
+        print(f"Audit report: {(Path(args.audit_root) / f'{args.audit_stem}_audit.json').resolve()}")
         if not audit["audit_passed"]:
             sys.exit(1)
         return
@@ -686,6 +861,9 @@ def main() -> None:
         matcher=matcher,
         crop_pad=args.crop_pad,
         clean=args.clean,
+        matching=args.matching,
+        band_margin=args.band_margin,
+        full_image_threshold=args.full_image_threshold,
     )
     print(f"Fusion dataset: {output_root.resolve()}")
     print(f"Samples: {len(records)}")
@@ -695,9 +873,10 @@ def main() -> None:
             records=records,
             class_names=read_class_names(Path(args.source)),
             audit_root=Path(args.audit_root),
+            audit_stem=args.audit_stem,
         )
         print(f"Audit passed: {audit['audit_passed']}")
-        print(f"Audit report: {(Path(args.audit_root) / 'fusion_v3_audit.json').resolve()}")
+        print(f"Audit report: {(Path(args.audit_root) / f'{args.audit_stem}_audit.json').resolve()}")
         if not audit["audit_passed"]:
             sys.exit(1)
 
