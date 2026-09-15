@@ -1,0 +1,74 @@
+{
+  "output_root": "D:/Python/Project/my_data/datasets/underwater_cls_fusion_v3",
+  "npz_fields": [
+    "gray",
+    "signed_q",
+    "abs_q",
+    "valid",
+    "quality",
+    "class_id"
+  ],
+  "quality_vector_keys": [
+    "valid_ratio",
+    "in_bounds_ratio",
+    "brightness_valid_ratio",
+    "mean_abs_q"
+  ],
+  "class_names": [
+    "metal_submarine",
+    "plastic_fish",
+    "plastic_submarine",
+    "real_fish"
+  ],
+  "expected_splits": {
+    "train": 2078,
+    "val": 368,
+    "test": 362
+  },
+  "counts": {
+    "total": 2808,
+    "train": 2078,
+    "val": 368,
+    "test": 362
+  },
+  "count_match_expected": true,
+  "per_class": {
+    "metal_submarine": {
+      "train": 472,
+      "val": 90,
+      "test": 46
+    },
+    "plastic_fish": {
+      "train": 768,
+      "val": 197,
+      "test": 135
+    },
+    "plastic_submarine": {
+      "train": 484,
+      "val": 63,
+      "test": 98
+    },
+    "real_fish": {
+      "train": 354,
+      "val": 18,
+      "test": 83
+    }
+  },
+  "group_split_leakage": {},
+  "decoded_samples": 2808,
+  "decode_failures": [],
+  "invalid_pixel_nonzero_failures": [],
+  "saturated_left_band_failures": [],
+  "saturated_valid_pixels": 5821,
+  "polar_valid_ratio": {
+    "mean": 0.23119352210341365,
+    "min": 0.0,
+    "max": 0.5442307692307692
+  },
+  "mean_abs_q_valid_pixels": {
+    "mean": 0.09154159715070606
+  },
+  "previews_written": 8,
+  "stereo_valid_samples": 2693,
+  "audit_passed": true
+}
