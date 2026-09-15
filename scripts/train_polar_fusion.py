@@ -129,6 +129,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
+        "--limit-batches",
+        type=int,
+        default=0,
+        help="Verification helper: cap train/val batches per epoch "
+        "(0 = all batches).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate data and structure only; no training, no run outputs.",
@@ -327,12 +334,14 @@ def classification_metrics(
 
 
 @torch.no_grad()
-def _evaluate(model: PolarFusionModel, loader, device: str) -> dict:
+def _evaluate(model: PolarFusionModel, loader, device: str, limit_batches: int = 0) -> dict:
     """Fusion-branch metrics over a loader (final_logits predictions)."""
     model.eval()
     labels_all: list[int] = []
     preds: list[int] = []
-    for gray, polar, quality, labels in loader:
+    for batch_index, (gray, polar, quality, labels) in enumerate(loader):
+        if limit_batches and batch_index >= limit_batches:
+            break
         out = model(gray.to(device), polar.to(device), quality.to(device))
         preds.extend(out["final_logits"].argmax(dim=1).cpu().tolist())
         labels_all.extend(labels.tolist())
@@ -539,7 +548,9 @@ def run_training(args: argparse.Namespace) -> Path:
     best_path = run_dir / "best.pt"
     for epoch in range(args.epochs):
         _apply_phase_modes(model, joint)
-        for gray, polar, quality, labels in train_loader:
+        for batch_index, (gray, polar, quality, labels) in enumerate(train_loader):
+            if args.limit_batches and batch_index >= args.limit_batches:
+                break
             gray = gray.to(device)
             polar = polar.to(device)
             quality = quality.to(device)
@@ -560,7 +571,7 @@ def run_training(args: argparse.Namespace) -> Path:
             loss.backward()
             optimizer.step()
 
-        val_metrics = _evaluate(model, val_loader, device)
+        val_metrics = _evaluate(model, val_loader, device, args.limit_batches)
         recalls = " ".join(
             f"{name}={val_metrics['per_class_recall'].get(str(i), 0.0):.3f}"
             for i, name in enumerate(class_names)
