@@ -161,6 +161,87 @@ class PolarFusionModel(nn.Module):
             param.requires_grad = not frozen
 
 
+class GrayBackboneAdapter(nn.Module):
+    """Normalizes a real Ultralytics classification model for fusion use.
+
+    Handles two real-world behaviors of the Ultralytics ClassificationModel:
+    eval-mode ``forward`` returns a ``(softmax_probs, raw_logits)`` tuple
+    while train mode returns a tensor; and the checkpoint's class order may
+    differ from the V3 dataset order (the accepted gray weights use
+    ``plastic_fish=1, plastic_submarine=2`` while V3 uses the seg dataset's
+    ``plastic_submarine=1, plastic_fish=2``).
+
+    ``perm`` maps output columns to the target order: column ``i`` of the
+    adapter output is the backbone's column ``perm[i]``. ``None`` keeps the
+    backbone order unchanged.
+    """
+
+    def __init__(self, module: nn.Module, perm: Sequence[int] | None = None):
+        super().__init__()
+        self.module = module
+        self.register_buffer(
+            "perm",
+            torch.as_tensor(list(perm), dtype=torch.long) if perm is not None else None,
+        )
+
+    @staticmethod
+    def _unwrap(output: Any) -> torch.Tensor:
+        """Extract the raw logits tensor from an Ultralytics output."""
+        if isinstance(output, (tuple, list)):
+            if len(output) == 2:
+                first, second = output
+                # The row-stochastic element is the softmaxed probability;
+                # the other one is the raw logits we must add deltas to.
+                first_is_prob = (
+                    isinstance(first, torch.Tensor)
+                    and first.dim() == 2
+                    and bool(
+                        torch.allclose(
+                            first.sum(-1),
+                            torch.ones(first.shape[0], device=first.device),
+                            atol=1e-3,
+                        )
+                    )
+                )
+                return second if first_is_prob else first
+            return output[0]
+        return output
+
+    def forward(self, gray: torch.Tensor) -> torch.Tensor:
+        logits = self._unwrap(self.module(gray))
+        if self.perm is not None:
+            logits = logits[:, self.perm]
+        return logits
+
+
+def build_gray_class_perm(
+    gray_class_names: dict[int, str] | list[str],
+    target_class_names: Sequence[str],
+) -> list[int]:
+    """Column permutation aligning gray backbone logits to the target order.
+
+    ``perm[i]`` is the gray backbone column index whose class name equals
+    ``target_class_names[i]``. Raises when any target class is missing or
+    gray names are ambiguous.
+    """
+    names = (
+        list(gray_class_names)
+        if isinstance(gray_class_names, (list, tuple))
+        else [str(gray_class_names[key]) for key in sorted(gray_class_names)]
+    )
+    if len(set(names)) != len(names):
+        raise ValueError(f"gray class names are not unique: {names}")
+    perm: list[int] = []
+    for target in target_class_names:
+        if target not in names:
+            raise ValueError(
+                f"target class {target!r} not present in gray backbone names {names}; "
+                "class order mismatch must be resolved before training"
+            )
+        perm.append(names.index(target))
+    return perm
+
+
 @dataclasses.dataclass(frozen=True)
 class FusionCheckpointMetadata:
     version: str
@@ -169,12 +250,16 @@ class FusionCheckpointMetadata:
     base_model: str
     quality_vector_keys: tuple[str, ...]
     imgsz: int
+    gray_init: str = ""
+    gray_class_names: tuple[str, ...] = ()
 
 
 def fusion_metadata(
     class_names: Sequence[str],
     base_model: str = DEFAULT_BASE_MODEL,
     imgsz: int = 224,
+    gray_init: str = "",
+    gray_class_names: Sequence[str] = (),
 ) -> FusionCheckpointMetadata:
     return FusionCheckpointMetadata(
         version=FUSION_VERSION,
@@ -183,6 +268,8 @@ def fusion_metadata(
         base_model=str(base_model),
         quality_vector_keys=tuple(QUALITY_VECTOR_KEYS),
         imgsz=int(imgsz),
+        gray_init=str(gray_init),
+        gray_class_names=tuple(str(name) for name in gray_class_names),
     )
 
 
@@ -206,6 +293,8 @@ def save_fusion_checkpoint(
         "base_model": metadata.base_model,
         "quality_vector_keys": list(metadata.quality_vector_keys),
         "imgsz": metadata.imgsz,
+        "gray_init": metadata.gray_init,
+        "gray_class_names": list(metadata.gray_class_names),
         "state_dict": model.state_dict(),
     }
     if extra:
@@ -229,6 +318,8 @@ def read_fusion_metadata(path: str | Path) -> FusionCheckpointMetadata:
         base_model=str(payload["base_model"]),
         quality_vector_keys=tuple(payload["quality_vector_keys"]),
         imgsz=int(payload.get("imgsz", 224)),
+        gray_init=str(payload.get("gray_init", "")),
+        gray_class_names=tuple(str(n) for n in payload.get("gray_class_names", ())),
     )
 
 
@@ -253,6 +344,8 @@ def load_fusion_checkpoint(
         base_model=str(payload["base_model"]),
         quality_vector_keys=tuple(payload["quality_vector_keys"]),
         imgsz=int(payload.get("imgsz", 224)),
+        gray_init=str(payload.get("gray_init", "")),
+        gray_class_names=tuple(str(n) for n in payload.get("gray_class_names", ())),
     )
     model = PolarFusionModel(
         gray_backbone, num_classes=len(metadata.class_names),

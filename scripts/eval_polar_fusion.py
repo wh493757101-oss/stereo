@@ -38,7 +38,7 @@ from models.polar_fusion import (
     read_fusion_metadata,
     read_manifest_split,
 )
-from scripts.train_polar_fusion import load_gray_backbone
+from scripts.train_polar_fusion import prepare_gray_backbone
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -140,7 +140,17 @@ def main(argv: list[str] | None = None) -> int:
     base_path = Path(base_name)
     if not base_path.is_absolute():
         base_path = PROJECT_ROOT / base_name
-    if not base_path.is_file():
+    if metadata.gray_init:
+        gray_path = Path(metadata.gray_init)
+        gray_path = gray_path if gray_path.is_absolute() else PROJECT_ROOT / gray_path
+        if not gray_path.is_file():
+            print(
+                f"gray branch weights {gray_path} (recorded in the checkpoint) "
+                "are missing; evaluation requires them locally.",
+                file=sys.stderr,
+            )
+            return 2
+    elif not base_path.is_file():
         print(
             f"gray backbone checkpoint {base_path} is missing; evaluation "
             "requires it locally (no automatic download).",
@@ -148,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    backbone = load_gray_backbone(base_path, device)
+    backbone, _ = prepare_gray_backbone(
+        base_path, metadata.gray_init, list(metadata.class_names), device
+    )
     model, metadata, _ = load_fusion_checkpoint(checkpoint, backbone)
     model = model.to(device)
 

@@ -25,9 +25,11 @@ from models.polar_fusion import (
     FUSION_VERSION,
     FusionCheckpointMetadata,
     FusionClsDataset,
+    GrayBackboneAdapter,
     PolarDeltaNet,
     PolarFusionModel,
     PolarGateNet,
+    build_gray_class_perm,
     class_names_from_manifest,
     fusion_metadata,
     load_fusion_checkpoint,
@@ -68,6 +70,122 @@ def make_inputs(batch=4, num_classes=4, size=32, seed=0):
     polar = torch.rand(batch, 3, size, size, generator=g)
     quality = torch.rand(batch, QUALITY_VECTOR_LENGTH, generator=g)
     return gray, polar, quality
+
+
+class TestGrayBackboneAdapter:
+    def test_eval_tuple_returns_raw_logits(self):
+        """Real Ultralytics classification models return (probs, logits) in
+        eval mode; the adapter must expose the raw logits."""
+
+        class TupleBackbone(nn.Module):
+            def forward(self, gray):
+                logits = torch.tensor([[1.0, 2.0, 0.5, -1.0]])
+                return (logits.softmax(-1), logits)
+
+        adapter = GrayBackboneAdapter(TupleBackbone().eval())
+        out = adapter(torch.zeros(1, 3, 8, 8))
+        assert isinstance(out, torch.Tensor)
+        torch.testing.assert_close(out, torch.tensor([[1.0, 2.0, 0.5, -1.0]]))
+
+    def test_train_mode_tensor_passthrough(self):
+        class TensorBackbone(nn.Module):
+            def forward(self, gray):
+                return torch.ones(1, 4)
+
+        adapter = GrayBackboneAdapter(TensorBackbone())
+        out = adapter(torch.zeros(1, 3, 8, 8))
+        torch.testing.assert_close(out, torch.ones(1, 4))
+
+    def test_perm_reorders_columns_to_target_class_order(self):
+        class FixedBackbone(nn.Module):
+            def forward(self, gray):
+                return torch.tensor([[10.0, 20.0, 30.0, 40.0]])
+
+        # V3 order (plastic_submarine=1, plastic_fish=2) vs gray order
+        # (plastic_fish=1, plastic_submarine=2): V3 column i takes gray col.
+        perm = [0, 2, 1, 3]
+        adapter = GrayBackboneAdapter(FixedBackbone(), perm=perm)
+        out = adapter(torch.zeros(1, 3, 8, 8))
+        torch.testing.assert_close(out, torch.tensor([[10.0, 30.0, 20.0, 40.0]]))
+
+    def test_fusion_with_real_style_eval_backbone(self):
+        """End-to-end: eval-mode tuple backbone + permutation inside the
+        fusion forward must not raise (review issue 3 regression)."""
+
+        class UltralyticsStyleBackbone(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(3, 4)
+
+            def forward(self, gray):
+                logits = self.linear(gray.mean(dim=(2, 3)))
+                if self.training:
+                    return logits
+                return (logits.softmax(-1), logits)
+
+        adapter = GrayBackboneAdapter(
+            UltralyticsStyleBackbone().eval(), perm=[0, 2, 1, 3]
+        )
+        model = PolarFusionModel(adapter, num_classes=4)
+        model.eval()
+        gray, polar, quality = make_inputs()
+        out = model(gray, polar, quality)
+        assert out["final_logits"].shape == (4, 4)
+        torch.testing.assert_close(
+            out["final_logits"], out["gray_logits"] + out["gate"] * out["polar_delta"]
+        )
+
+
+class TestGrayClassPerm:
+    GRAY_NAMES = {
+        0: "metal_submarine",
+        1: "plastic_fish",
+        2: "plastic_submarine",
+        3: "real_fish",
+    }
+    V3_NAMES = [
+        "metal_submarine",
+        "plastic_submarine",
+        "plastic_fish",
+        "real_fish",
+    ]
+
+    def test_perm_fixes_plastic_fish_submarine_swap(self):
+        assert build_gray_class_perm(self.GRAY_NAMES, self.V3_NAMES) == [0, 2, 1, 3]
+
+    def test_identity_when_orders_match(self):
+        names = {0: "a", 1: "b", 2: "c", 3: "d"}
+        assert build_gray_class_perm(names, ["a", "b", "c", "d"]) == [0, 1, 2, 3]
+
+    def test_missing_target_class_raises(self):
+        with pytest.raises(ValueError, match="not present"):
+            build_gray_class_perm(self.GRAY_NAMES, ["metal_submarine", "unknown"])
+
+    def test_duplicate_gray_names_raise(self):
+        with pytest.raises(ValueError, match="not unique"):
+            build_gray_class_perm({0: "a", 1: "a"}, ["a"])
+
+
+class TestGrayInitMetadata:
+    def test_roundtrip_preserves_gray_init(self, tmp_path):
+        model = PolarFusionModel(TinyBackbone(4), num_classes=4)
+        meta = fusion_metadata(
+            ["w", "x", "y", "z"],
+            gray_init="runs/train/run_20260913_initial/model_b-gray/weights/best.pt",
+            gray_class_names=[
+                "metal_submarine",
+                "plastic_fish",
+                "plastic_submarine",
+                "real_fish",
+            ],
+        )
+        path = save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+        assert read_fusion_metadata(path) == meta
+
+    def test_metadata_defaults_empty(self):
+        meta = fusion_metadata(["w", "x", "y", "z"])
+        assert meta.gray_init == ""
+        assert meta.gray_class_names == ()
 
 
 class TestHeads:

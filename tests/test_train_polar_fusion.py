@@ -83,6 +83,269 @@ def mini_dataset(tmp_path):
     return root
 
 
+class TestDeviceMapping:
+    def test_ultralytics_style_ids_map_to_torch_names(self):
+        assert tpf.torch_device_name("0") == "cuda:0"
+        assert tpf.torch_device_name("1") == "cuda:1"
+        assert tpf.torch_device_name("cuda") == "cuda:0"
+        assert tpf.torch_device_name("cuda:1") == "cuda:1"
+        assert tpf.torch_device_name("cpu") == "cpu"
+
+    def test_unsupported_device_raises(self):
+        with pytest.raises(ValueError, match="device"):
+            tpf.torch_device_name("tpu")
+
+    def test_resolve_device_validates_cuda_before_mapping(self, monkeypatch):
+        from scripts.train_models import DeviceUnavailableError
+
+        monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+        with pytest.raises(DeviceUnavailableError):
+            tpf.resolve_device("0", cuda_available=False)
+
+
+class FakeClassifyHead(torch.nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.linear = torch.nn.Linear(in_features, out_features)
+
+
+class FakeUltralyticsModel(torch.nn.Module):
+    """Mimics the pieces of prepare_gray_backbone that touch YOLO models.
+
+    Like the real ClassificationModel: train mode returns a logits tensor,
+    eval mode returns a (softmax_probs, logits) tuple.
+    """
+
+    def __init__(self, out_features, names):
+        super().__init__()
+        self.model = torch.nn.Sequential(
+            torch.nn.Identity(), FakeClassifyHead(1280, out_features)
+        )
+        self.names = names
+
+    def forward(self, gray):
+        # Feature dimension matches the head's in_features=1280; the
+        # backbone body itself is not exercised in these tests.
+        features = torch.zeros(gray.shape[0], 1280, device=gray.device)
+        logits = self.model[-1].linear(features)
+        if self.training:
+            return logits
+        return (logits.softmax(-1), logits)
+
+
+class FakeYOLO:
+    last_weights: str | None = None
+    last_model_head = None
+
+    def __init__(self, weights):
+        FakeYOLO.last_weights = weights
+        if "gray" in str(weights):
+            # Accepted 4-class gray weights: plastic_fish=1, plastic_submarine=2
+            self.model = FakeUltralyticsModel(
+                4,
+                {0: "metal_submarine", 1: "plastic_fish", 2: "plastic_submarine", 3: "real_fish"},
+            )
+        else:
+            # Stock ImageNet base: 1000 classes, generic names
+            self.model = FakeUltralyticsModel(
+                1000, {i: f"imagenet_{i}" for i in range(1000)}
+            )
+        FakeYOLO.last_model_head = self.model.model[-1]
+
+
+@pytest.fixture
+def fake_ultralytics(monkeypatch):
+    import types
+
+    module = types.ModuleType("ultralytics")
+    module.YOLO = FakeYOLO
+    monkeypatch.setitem(sys.modules, "ultralytics", module)
+    FakeYOLO.last_weights = None
+    FakeYOLO.last_model_head = None
+    return module
+
+
+class TestPrepareGrayBackbone:
+    V3_NAMES = [
+        "metal_submarine",
+        "plastic_submarine",
+        "plastic_fish",
+        "real_fish",
+    ]
+
+    def test_gray_weights_branch_derives_perm(
+        self, tmp_path, fake_ultralytics
+    ):
+        weights = tmp_path / "model_b-gray.pt"
+        weights.write_bytes(b"fake")
+        backbone, info = tpf.prepare_gray_backbone(
+            tmp_path / "base.pt", str(weights), self.V3_NAMES, "cpu"
+        )
+
+        assert info["head_replaced"] is False
+        assert info["perm"] == [0, 2, 1, 3]  # plastic_fish/submarine swap fixed
+        assert fake_ultralytics.YOLO.last_weights == str(weights)
+        # Adapter must expose raw logits in eval mode
+        backbone.eval()
+        out = backbone(torch.zeros(2, 3, 16, 16))
+        assert out.shape == (2, 4)
+
+    def test_missing_gray_weights_refused_not_silent(self, tmp_path, fake_ultralytics):
+        with pytest.raises(FileNotFoundError, match="no\\s+automatic|refuse|missing"):
+            tpf.prepare_gray_backbone(
+                tmp_path / "base.pt",
+                str(tmp_path / "missing.pt"),
+                self.V3_NAMES,
+                "cpu",
+            )
+
+    def test_base_branch_replaces_head_to_dataset_classes(
+        self, tmp_path, fake_ultralytics
+    ):
+        backbone, info = tpf.prepare_gray_backbone(
+            tmp_path / "yolo26n-cls.pt", "", self.V3_NAMES, "cpu"
+        )
+
+        assert info["head_replaced"] is True
+        assert info["perm"] is None
+        head = fake_ultralytics.YOLO.last_model_head
+        assert head.linear.out_features == 4  # was 1000
+        assert info["gray_class_names"] == self.V3_NAMES
+
+    def test_head_width_mismatch_raises(self, tmp_path, fake_ultralytics, monkeypatch):
+        weights = tmp_path / "wrong_gray.pt"
+        weights.write_bytes(b"fake")
+        original_init = FakeUltralyticsModel.__init__
+
+        def narrow_init(self, out_features, names):
+            original_init(self, 3, names)  # wrong class count
+
+        monkeypatch.setattr(FakeUltralyticsModel, "__init__", narrow_init)
+        with pytest.raises(ValueError, match="classes"):
+            tpf.prepare_gray_backbone(
+                tmp_path / "base.pt", str(weights), self.V3_NAMES, "cpu"
+            )
+
+
+class TestPhaseRunDir:
+    def test_conflicting_run_directory_refused(self, tmp_path):
+        run_dir = tpf.PROJECT_ROOT / "runs" / "train" / "test_phase_conflict" / "polar_fusion" / "freeze"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with pytest.raises(FileExistsError, match="new --run-id"):
+                tpf._phase_run_dir("test_phase_conflict", "freeze")
+        finally:
+            import shutil
+
+            shutil.rmtree(
+                tpf.PROJECT_ROOT / "runs" / "train" / "test_phase_conflict",
+                ignore_errors=True,
+            )
+
+    def test_fresh_directory_created(self, tmp_path):
+        run_dir = tpf._phase_run_dir("test_phase_fresh_dir", "freeze")
+        try:
+            assert run_dir.is_dir()
+            assert run_dir.name == "freeze"
+        finally:
+            import shutil
+
+            shutil.rmtree(
+                tpf.PROJECT_ROOT / "runs" / "train" / "test_phase_fresh_dir",
+                ignore_errors=True,
+            )
+
+
+class TestResolveInitCheckpoint:
+    def make_args(self, **overrides):
+        argv = ["--run-id", "run_x", "--phase", "joint"]
+        for key, value in overrides.items():
+            if value is not None:
+                argv += [f"--{key.replace('_', '-')}", str(value)]
+        args = tpf.parse_args(argv)
+        for key, value in overrides.items():
+            if value is None:
+                setattr(args, key, None)
+        return args
+
+    def test_joint_without_freeze_checkpoint_raises(self):
+        args = self.make_args(run_id="no_such_run_for_joint")
+        with pytest.raises(FileNotFoundError, match="init-from|freeze"):
+            tpf._resolve_init_checkpoint(args)
+
+    def test_joint_uses_freeze_best_automatically(self, tmp_path):
+        run_dir = tpf.PROJECT_ROOT / "runs" / "train" / "run_with_freeze" / "polar_fusion" / "freeze"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        best = run_dir / "best.pt"
+        best.write_bytes(b"fake")
+        try:
+            args = self.make_args(run_id="run_with_freeze")
+            assert tpf._resolve_init_checkpoint(args) == best
+        finally:
+            import shutil
+
+            shutil.rmtree(
+                tpf.PROJECT_ROOT / "runs" / "train" / "run_with_freeze",
+                ignore_errors=True,
+            )
+
+    def test_explicit_init_from(self, tmp_path):
+        ckpt = tmp_path / "some.pt"
+        ckpt.write_bytes(b"fake")
+        args = self.make_args(init_from=str(ckpt))
+        assert tpf._resolve_init_checkpoint(args) == ckpt
+
+    def test_missing_explicit_init_from_raises(self):
+        args = self.make_args(init_from="missing.pt")
+        with pytest.raises(FileNotFoundError, match="init-from"):
+            tpf._resolve_init_checkpoint(args)
+
+    def test_freeze_phase_needs_no_init(self):
+        args = tpf.parse_args(["--run-id", "run_x", "--phase", "freeze"])
+        assert tpf._resolve_init_checkpoint(args) is None
+
+
+class TinyBackbone(torch.nn.Module):
+    """Local stand-in backbone (tests package is not importable by name)."""
+
+    def __init__(self, num_classes: int):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.AdaptiveAvgPool2d(1),
+            torch.nn.Flatten(),
+            torch.nn.Linear(3, num_classes),
+        )
+
+    def forward(self, gray: torch.Tensor) -> torch.Tensor:
+        return self.net(gray)
+
+
+class TestPhaseModes:
+    def test_freeze_keeps_gray_backbone_in_eval(self):
+        from models.polar_fusion import GrayBackboneAdapter, PolarFusionModel
+
+        model = PolarFusionModel(
+            GrayBackboneAdapter(TinyBackbone(4)), num_classes=4
+        )
+        model.set_gray_frozen(True)
+        tpf._apply_phase_modes(model, joint=False)
+
+        # BN statistics of the frozen gray branch must not update.
+        assert model.gray_backbone.training is False
+        assert model.gray_backbone.module.training is False
+        assert model.delta_net.training is True
+        assert model.gate_net.training is True
+
+    def test_joint_trains_everything(self):
+        from models.polar_fusion import GrayBackboneAdapter, PolarFusionModel
+
+        model = PolarFusionModel(
+            GrayBackboneAdapter(TinyBackbone(4)), num_classes=4
+        )
+        tpf._apply_phase_modes(model, joint=True)
+        assert model.gray_backbone.module.training is True
+
+
 class TestCLI:
     def test_run_id_required(self):
         with pytest.raises(SystemExit):
@@ -193,10 +456,10 @@ class TestTrainingGate:
             )
 
     def test_run_training_validates_dataset_first(self, mini_dataset, monkeypatch):
-        def refuse(_):
+        def refuse(*a, **kw):
             raise FileNotFoundError("base checkpoint missing; no automatic download")
 
-        monkeypatch.setattr(tpf, "load_gray_backbone", refuse)
+        monkeypatch.setattr(tpf, "prepare_gray_backbone", refuse)
         with pytest.raises(FileNotFoundError):
             tpf.run_training(
                 tpf.parse_args(["--run-id", "run_x", "--data", str(mini_dataset)])
