@@ -44,6 +44,7 @@ from core.fusion_dataset import (
     NPZ_FIELDS,
     QUALITY_VECTOR_KEYS,
     build_quality_vector,
+    file_digest,
     load_fusion_sample,
     quality_vector_from_result,
     save_fusion_sample,
@@ -660,6 +661,41 @@ def _check_manifest_consistency(
     return {key: value[:50] for key, value in failures.items()}
 
 
+def _check_npz_quality(sample, record: FusionSampleRecord) -> str | None:
+    """Cross-check the npz quality vector (the training gate input) against
+    the manifest record and the sample arrays themselves.
+
+    Recomputing the mask-level ratios from the crop alone is impossible
+    (the instance mask is not stored in the npz), so the exact ratios are
+    checked against the manifest and the arrays are checked for the sound
+    boundary invariants listed below. Returns a failure reason or None.
+    """
+    # 1. npz quality must equal the manifest's recorded quality (same
+    #    6-decimal rounding tolerance as the manifest columns).
+    if not np.allclose(
+        sample.quality,
+        np.asarray(record.quality, dtype=np.float32),
+        atol=1.5e-6,
+    ):
+        return "npz quality != manifest quality"
+
+    valid = sample.valid > 0
+    valid_ratio, _, _, mean_abs_q = sample.quality
+    # 2. No valid pixel anywhere in the crop -> the mask (a subset of the
+    #    crop window) has no valid pixel either, so every quality entry
+    #    must be exactly 0.
+    if not valid.any() and float(np.abs(sample.quality).sum()) > 0.0:
+        return f"zero valid pixels but nonzero quality {sample.quality.tolist()}"
+    # 3. mean_abs_q is a mean over mask-valid pixels, a subset of the
+    #    crop-valid pixels: it can never exceed the crop's max abs_q.
+    if valid.any() and float(mean_abs_q) > float(sample.abs_q[valid].max()) + 1e-6:
+        return (
+            f"mean_abs_q {float(mean_abs_q):.6f} exceeds max abs_q "
+            f"{float(sample.abs_q[valid].max()):.6f} on valid pixels"
+        )
+    return None
+
+
 def audit_fusion_dataset(
     output_root: Path,
     records: list[FusionSampleRecord],
@@ -725,10 +761,12 @@ def audit_fusion_dataset(
     invalid_nonzero_failures: list[str] = []
     saturated_band_failures: list[str] = []
     value_range_failures: list[str] = []
+    npz_quality_failures: list[str] = []
     polar_valid_ratios: list[float] = []
     mean_abs_q: list[float] = []
     saturated_valid_pixels = 0
     previews_written = 0
+    file_digests: dict[str, str] = {}
 
     preview_dir = audit_root / f"{audit_stem}_preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
@@ -736,6 +774,12 @@ def audit_fusion_dataset(
 
     for record in records:
         path = output_root / record.npz_path
+        # Content digest at audit time: the training gate re-verifies these
+        # so later tampering/loss of samples is caught even though the
+        # historic audit verdict is unchanged.
+        file_digests[record.npz_path] = (
+            file_digest(path) if path.is_file() else ""
+        )
         try:
             sample = load_fusion_sample(path)
         except Exception as exc:  # decode/dtype/shape/NaN validation
@@ -751,6 +795,11 @@ def audit_fusion_dataset(
         failure = _check_sample_values(sample)
         if failure is not None:
             value_range_failures.append(f"{record.npz_path}: {failure}")
+            continue
+
+        quality_failure = _check_npz_quality(sample, record)
+        if quality_failure is not None:
+            npz_quality_failures.append(f"{record.npz_path}: {quality_failure}")
             continue
 
         valid = sample.valid > 0
@@ -777,12 +826,16 @@ def audit_fusion_dataset(
             _write_preview(preview_dir, record, sample)
             previews_written += 1
 
-    audit["decoded_samples"] = total - len(decode_failures) - len(value_range_failures)
+    audit["decoded_samples"] = (
+        total - len(decode_failures) - len(value_range_failures) - len(npz_quality_failures)
+    )
     audit["decode_failures"] = decode_failures[:50]
     audit["invalid_pixel_nonzero_failures"] = invalid_nonzero_failures[:50]
     audit["saturated_left_band_failures"] = saturated_band_failures[:50]
     audit["value_range_failures"] = value_range_failures[:50]
+    audit["npz_quality_failures"] = npz_quality_failures[:50]
     audit["saturated_valid_pixels"] = saturated_valid_pixels
+    audit["file_digests"] = file_digests
     audit["polar_valid_ratio"] = {
         "mean": float(np.mean(polar_valid_ratios)) if polar_valid_ratios else 0.0,
         "min": float(np.min(polar_valid_ratios)) if polar_valid_ratios else 0.0,
@@ -798,6 +851,7 @@ def audit_fusion_dataset(
         and not invalid_nonzero_failures
         and not saturated_band_failures
         and not value_range_failures
+        and not npz_quality_failures
         and not any(manifest_failures.values())
         and not audit["orphan_npz_files"]
         and not leakage

@@ -484,7 +484,7 @@ class TestBandMatchingMode:
 
 
 class TestAudit:
-    def make_records(self, records_spec):
+    def make_records(self, records_spec, quality=(0.8, 0.9, 0.9, 0.1), polar_valid_ratio=0.8):
         return [
             FusionSampleRecord(
                 sample_name=f"s{i}",
@@ -498,8 +498,8 @@ class TestAudit:
                 stereo_reason="ok",
                 stereo_valid_ratio=0.9,
                 disparity=12.0,
-                polar_valid_ratio=0.8,
-                quality=(0.8, 0.9, 0.9, 0.1),
+                polar_valid_ratio=polar_valid_ratio,
+                quality=quality,
                 npz_path=npz_path,
             )
             for i, (split, group, class_id, npz_path) in enumerate(records_spec)
@@ -572,7 +572,11 @@ class TestAudit:
             quality=build_quality_vector(0, 0, 0, 0),
             class_id=0,
         )
-        records = self.make_records([("train", "g", 0, "bad.npz")])
+        records = self.make_records(
+            [("train", "g", 0, "bad.npz")],
+            quality=(0.0, 0.0, 0.0, 0.0),
+            polar_valid_ratio=0.0,
+        )
         audit = audit_fusion_dataset(
             output_root=tmp_path,
             records=records,
@@ -596,7 +600,11 @@ class TestAudit:
             quality=build_quality_vector(1, 1, 1, 1),
             class_id=0,
         )
-        records = self.make_records([("train", "g", 0, "bad.npz")])
+        records = self.make_records(
+            [("train", "g", 0, "bad.npz")],
+            quality=(1.0, 1.0, 1.0, 1.0),
+            polar_valid_ratio=1.0,
+        )
         audit = audit_fusion_dataset(
             output_root=tmp_path,
             records=records,
@@ -622,7 +630,11 @@ class TestAudit:
             quality=build_quality_vector(1, 1, 1, 1),
             class_id=0,
         )
-        records = self.make_records([("train", "g", 0, "train/class_0/s0.npz")])
+        records = self.make_records(
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(1.0, 1.0, 1.0, 1.0),
+            polar_valid_ratio=1.0,
+        )
         audit = audit_fusion_dataset(
             output_root=tmp_path,
             records=records,
@@ -633,6 +645,93 @@ class TestAudit:
         assert audit["saturated_left_band_failures"] == []
         assert audit["saturated_valid_pixels"] == 1
         assert audit["audit_passed"] is True
+
+    def test_audit_flags_npz_quality_mismatch(self, tmp_path):
+        """The npz quality vector is the training gate input; a divergence
+        from the manifest quality must fail the audit."""
+        gray = np.full((4, 4), 100, np.uint8)
+        signed = np.full((4, 4), 0.5, np.float32)
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=gray,
+            signed_q=signed,
+            abs_q=np.abs(signed),
+            valid=np.ones((4, 4), np.uint8),
+            quality=build_quality_vector(0.9, 1.0, 1.0, 0.5),  # npz says 0.9
+            class_id=0,
+        )
+        records = self.make_records(
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(0.1, 1.0, 1.0, 0.5),  # manifest says 0.1
+            polar_valid_ratio=0.1,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["npz_quality_failures"]
+        assert any("manifest" in f for f in audit["npz_quality_failures"])
+        assert audit["audit_passed"] is False
+
+    def test_audit_flags_nonzero_quality_without_valid_pixels(self, tmp_path):
+        gray = np.full((4, 4), 100, np.uint8)
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=gray,
+            signed_q=np.zeros((4, 4), np.float32),
+            abs_q=np.zeros((4, 4), np.float32),
+            valid=np.zeros((4, 4), np.uint8),
+            quality=build_quality_vector(0.0, 0.0, 0.0, 0.7),  # impossible
+            class_id=0,
+        )
+        records = self.make_records(
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(0.0, 0.0, 0.0, 0.7),
+            polar_valid_ratio=0.0,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert any(
+            "zero valid pixels" in f for f in audit["npz_quality_failures"]
+        )
+        assert audit["audit_passed"] is False
+
+    def test_audit_flags_mean_abs_q_above_crop_max(self, tmp_path):
+        """mean_abs_q is a mean over mask-valid pixels (a subset of the
+        crop-valid pixels), so it can never exceed the crop's max abs_q."""
+        gray = np.full((4, 4), 100, np.uint8)
+        signed = np.full((4, 4), 0.2, np.float32)
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=gray,
+            signed_q=signed,
+            abs_q=np.abs(signed),
+            valid=np.ones((4, 4), np.uint8),
+            quality=build_quality_vector(1.0, 1.0, 1.0, 0.9),  # > max 0.2
+            class_id=0,
+        )
+        records = self.make_records(
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(1.0, 1.0, 1.0, 0.9),
+            polar_valid_ratio=1.0,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert any("max abs_q" in f for f in audit["npz_quality_failures"])
+        assert audit["audit_passed"] is False
 
     def test_audit_writes_report_into_dataset_root(self, tmp_path, synthetic_source):
         output = tmp_path / "fusion_v3"

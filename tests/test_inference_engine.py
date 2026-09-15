@@ -126,6 +126,27 @@ class NamelessFakeClassifier(FakeClassifier):
         )
 
 
+class FakeFusionClassifier:
+    """Model B for fusion mode: records FusionSampleInput batches."""
+
+    def __init__(self):
+        self.batch_calls = []
+
+    def predict_batch(self, samples):
+        self.batch_calls.append(list(samples))
+        from models.polar_fusion import FusionClassResult
+
+        return [
+            FusionClassResult(
+                class_id=i % 4,
+                class_name=f"material_{i % 4}",
+                confidence=0.8,
+                valid=s is not None,
+            )
+            for i, s in enumerate(samples)
+        ]
+
+
 class FakeMatcher:
     """Stands in for StereoMatcher with a pre-set dense result."""
 
@@ -1023,3 +1044,114 @@ class TestAlreadyRectified:
         engine, _ = make_engine(rectifier=rectifier, rectify_enabled=True)
         engine.process_frame(make_gray(67), make_gray(68), already_rectified=True)
         assert rectifier.calls == []
+
+
+class TestFusionModelB:
+    def test_fusion_mode_builds_inputs_and_classifies(self):
+        model_b = FakeFusionClassifier()
+        engine, _ = make_engine(model_b=model_b, model_b_input_mode="fusion")
+        result = engine.process_frame_detailed(make_gray(0), make_gray(1))
+
+        assert model_b.batch_calls, "fusion classifier must be called"
+        inst = result.instances[0]
+        assert inst.class_name == "material_0"
+        sample = result.fusion_inputs[0]
+        assert sample is not None
+        # bbox (20,10,40,30) + padding 10 -> (40, 40) crop
+        assert sample.gray.shape == (40, 40)
+        assert sample.signed_q.shape == sample.gray.shape
+        assert sample.abs_q.shape == sample.gray.shape
+        assert sample.valid.shape == sample.gray.shape
+        assert sample.quality.shape == (4,)
+        assert sample.polar_invalid is False
+        # polar_valid_ratio equals the quality vector's first component
+        assert sample.quality[0] > 0.0
+        assert result.polar_result is not None
+
+    def test_fusion_mode_invalid_stereo_marks_polar_invalid(self):
+        model_b = FakeFusionClassifier()
+        engine, _ = make_engine(
+            model_b=model_b, model_b_input_mode="fusion",
+            matcher=FakeMatcher(valid=False),
+        )
+        result = engine.process_frame_detailed(make_gray(0), make_gray(1))
+        sample = result.fusion_inputs[0]
+        assert sample is not None
+        assert sample.polar_invalid is True
+        assert np.all(sample.valid == 0)
+        assert np.all(sample.quality == 0.0)
+
+    def test_fusion_mode_sync_skew_marks_polar_invalid(self):
+        model_b = FakeFusionClassifier()
+        engine, _ = make_engine(model_b=model_b, model_b_input_mode="fusion")
+        result = engine.process_frame_detailed(
+            make_gray(0), make_gray(1), sync_skew_ms=9.0
+        )
+        sample = result.fusion_inputs[0]
+        assert sample is not None
+        assert sample.polar_invalid is True
+        assert result.polar_result is None
+
+    def test_fusion_mode_rejects_unknown_mode(self):
+        with pytest.raises(ValueError, match="model_b_input_mode"):
+            make_engine(model_b_input_mode="dense")
+
+
+def make_instance_at(inst_id, x1, y1, x2, y2):
+    mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+    mask[y1:y2, x1:x2] = 255
+    return Instance(
+        id=inst_id,
+        bbox=(x1, y1, x2, y2),
+        mask=mask,
+        confidence=0.9,
+        class_id=0,
+        class_name="object",
+    )
+
+
+class TestFusionInstanceMasking:
+    def test_polar_channels_masked_to_own_instance(self):
+        """A neighbor's mask inside this instance's padded crop window must
+        not leak polar pixels: offline samples are generated per instance
+        mask, so online fusion inputs must be restricted the same way."""
+        inst0 = make_instance_at(0, 20, 10, 40, 30)
+        inst1 = make_instance_at(1, 44, 10, 60, 30)
+        engine, _ = make_engine(
+            model_a=FakeSegmenter(instances=[inst0, inst1]),
+            model_b=FakeFusionClassifier(),
+            model_b_input_mode="fusion",
+        )
+        result = engine.process_frame_detailed(make_gray(0), make_gray(1))
+        assert len(result.fusion_inputs) == 2
+        s0, s1 = result.fusion_inputs
+
+        # inst0 window is y[0,40) x[10,50); inst1's mask (cols 44+) falls
+        # inside it and must contribute nothing.
+        m0 = inst0.mask[0:40, 10:50] > 0
+        assert np.all(s0.valid[~m0] == 0)
+        assert np.all(s0.signed_q[~m0] == 0.0)
+        assert np.all(s0.abs_q[~m0] == 0.0)
+        assert np.any(s0.valid[m0] > 0)
+
+        # inst1 window is y[0,40) x[34,64); inst0's mask (cols <= 39) falls
+        # inside it and must contribute nothing.
+        m1 = inst1.mask[0:40, 34:64] > 0
+        assert np.all(s1.valid[~m1] == 0)
+        assert np.all(s1.abs_q[~m1] == 0.0)
+        assert np.any(s1.valid[m1] > 0)
+
+    def test_quality_stays_instance_scoped(self):
+        inst0 = make_instance_at(0, 20, 10, 40, 30)
+        inst1 = make_instance_at(1, 44, 10, 60, 30)
+        engine, _ = make_engine(
+            model_a=FakeSegmenter(instances=[inst0, inst1]),
+            model_b=FakeFusionClassifier(),
+            model_b_input_mode="fusion",
+        )
+        result = engine.process_frame_detailed(make_gray(0), make_gray(1))
+        s0, s1 = result.fusion_inputs
+        # With the matcher valid everywhere and both masks fully inside the
+        # band, each instance's valid_ratio is 1.0 over its own mask.
+        assert s0.quality[0] == pytest.approx(1.0)
+        assert s1.quality[0] == pytest.approx(1.0)

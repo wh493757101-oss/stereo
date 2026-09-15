@@ -22,6 +22,8 @@ from models.polar_fusion import (
     FusionSampleInput,
     PolarFusionModel,
     fusion_metadata,
+    read_fusion_metadata,
+    rebuild_gray_backbone,
     save_fusion_checkpoint,
 )
 
@@ -121,15 +123,18 @@ class FakeUltralyticsModel(torch.nn.Module):
     """Mimics the pieces of prepare_gray_backbone that touch YOLO models.
 
     Like the real ClassificationModel: train mode returns a logits tensor,
-    eval mode returns a (softmax_probs, logits) tuple.
+    eval mode returns a (softmax_probs, logits) tuple. Carries a ``yaml``
+    dict like real Ultralytics models so architecture-name derivation is
+    exercised (the real fresh-head base records e.g. ``yolo26n-cls``).
     """
 
-    def __init__(self, out_features, names):
+    def __init__(self, out_features, names, yaml_file):
         super().__init__()
         self.model = torch.nn.Sequential(
             torch.nn.Identity(), FakeClassifyHead(1280, out_features)
         )
         self.names = names
+        self.yaml = {"yaml_file": yaml_file}
 
     def forward(self, gray):
         # Feature dimension matches the head's in_features=1280; the
@@ -152,11 +157,12 @@ class FakeYOLO:
             self.model = FakeUltralyticsModel(
                 4,
                 {0: "metal_submarine", 1: "plastic_fish", 2: "plastic_submarine", 3: "real_fish"},
+                "yolov8n-cls.yaml",
             )
         else:
             # Stock ImageNet base: 1000 classes, generic names
             self.model = FakeUltralyticsModel(
-                1000, {i: f"imagenet_{i}" for i in range(1000)}
+                1000, {i: f"imagenet_{i}" for i in range(1000)}, "yolo26n-cls.yaml"
             )
         FakeYOLO.last_model_head = self.model.model[-1]
 
@@ -225,8 +231,8 @@ class TestPrepareGrayBackbone:
         weights.write_bytes(b"fake")
         original_init = FakeUltralyticsModel.__init__
 
-        def narrow_init(self, out_features, names):
-            original_init(self, 3, names)  # wrong class count
+        def narrow_init(self, out_features, names, yaml_file):
+            original_init(self, 3, names, yaml_file)  # wrong class count
 
         monkeypatch.setattr(FakeUltralyticsModel, "__init__", narrow_init)
         with pytest.raises(ValueError, match="classes"):
@@ -417,7 +423,9 @@ class TestCLI:
         args = tpf.parse_args(["--run-id", "run_x"])
         assert args.base == "yolo26n-cls.pt"
         assert args.phase == "freeze"
-        assert args.data == "datasets/underwater_cls_fusion_v3"
+        # Formal mainline: band-matched V4 dataset, no implicit gray weights.
+        assert args.data == "datasets/underwater_cls_fusion_v4_band"
+        assert args.gray_weights is None
         assert args.dry_run is False
 
     def test_invalid_run_id_rejected_before_any_work(self, monkeypatch):
@@ -517,6 +525,22 @@ class TestDryRun:
 
 
 class TestAuditGate:
+    @staticmethod
+    def write_audit_file(root: Path, passed: bool = True) -> None:
+        """Write a dataset_audit.json with real per-file digests, mirroring
+        what scripts.prepare_cls_fusion_dataset produces."""
+        import hashlib
+        import json
+
+        digests = {
+            p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(root.rglob("*.npz"))
+        }
+        (root / "dataset_audit.json").write_text(
+            json.dumps({"audit_passed": passed, "file_digests": digests}),
+            encoding="utf-8",
+        )
+
     def test_training_requires_audit_report(self, mini_dataset):
         with pytest.raises(FileNotFoundError, match="audit"):
             tpf.validate_dataset(mini_dataset)
@@ -536,11 +560,10 @@ class TestAuditGate:
         import hashlib
         import json
 
-        (mini_dataset / "dataset_audit.json").write_text(
-            '{"audit_passed": true}', encoding="utf-8"
-        )
+        self.write_audit_file(mini_dataset)
         report = tpf.validate_dataset(mini_dataset)
         assert report["audit_passed"] is True
+        assert report["integrity_verified_files"] == 8
         digest = hashlib.sha256()
         for name in ("dataset_manifest.csv", "dataset_audit.json"):
             digest.update(name.encode("utf-8"))
@@ -548,6 +571,31 @@ class TestAuditGate:
             digest.update((mini_dataset / name).read_bytes())
             digest.update(b"\0")
         assert report["audit_fingerprint"] == digest.hexdigest()
+
+    def test_tampered_npz_refused_for_training(self, mini_dataset):
+        self.write_audit_file(mini_dataset)
+        # Corrupt one audited sample after the audit "passed" (outside the
+        # spot-check set so the digest verification is what catches it).
+        victim = mini_dataset / "train" / "plastic" / "p1.npz"
+        victim.write_bytes(victim.read_bytes() + b"tampered")
+        with pytest.raises(ValueError, match="changed since the audit"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_deleted_npz_refused_for_training(self, mini_dataset):
+        self.write_audit_file(mini_dataset)
+        # Delete a sample that validate_dataset's spot-check does not load
+        # (only the first two samples per split are decoded there).
+        victim = mini_dataset / "train" / "plastic" / "p1.npz"
+        victim.unlink()
+        with pytest.raises(ValueError, match="changed since the audit"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_audit_without_digests_refused_for_training(self, mini_dataset):
+        (mini_dataset / "dataset_audit.json").write_text(
+            '{"audit_passed": true}', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="digests"):
+            tpf.validate_dataset(mini_dataset)
 
 
 class TestStructureCheck:
@@ -611,6 +659,62 @@ class TestTrainingGate:
             )
 
 
+class TestFreshHeadMetadataRoundtrip:
+    """Saving a fresh-head checkpoint and restoring it must work with the
+    real metadata flow: base_model records the reconstruction source path,
+    architecture the family name (regression for the yolov8n-cls-as-path
+    restore failure)."""
+
+    NAMES = ["metal_submarine", "plastic_submarine", "plastic_fish", "real_fish"]
+
+    def test_fresh_head_save_restore_roundtrip(self, tmp_path, fake_ultralytics):
+        base = tmp_path / "yolo26n-cls.pt"
+        base.write_bytes(b"fake")
+        backbone, info = tpf.prepare_gray_backbone(base, "", self.NAMES, "cpu")
+        assert info["head_replaced"] is True
+        assert info["architecture"] == "yolo26n-cls"
+
+        model = PolarFusionModel(backbone, num_classes=4)
+        meta = fusion_metadata(
+            self.NAMES,
+            base_model=info["base_model"],
+            architecture=info["architecture"],
+            head_replaced=True,
+        )
+        path = save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+
+        loaded_meta = read_fusion_metadata(path)
+        assert loaded_meta.architecture == "yolo26n-cls"
+        assert loaded_meta.base_model == str(base)
+        restored = rebuild_gray_backbone(loaded_meta, "cpu")
+        assert restored.module.model[-1].linear.out_features == 4
+        assert fake_ultralytics.YOLO.last_weights == str(base)
+
+    def test_gray_weights_metadata_roundtrip_records_architecture(
+        self, tmp_path, fake_ultralytics
+    ):
+        weights = tmp_path / "model_b-gray.pt"
+        weights.write_bytes(b"fake")
+        backbone, info = tpf.prepare_gray_backbone(
+            tmp_path / "base.pt", str(weights), self.NAMES, "cpu"
+        )
+        assert info["architecture"] == "yolov8n-cls"
+        model = PolarFusionModel(backbone, num_classes=4)
+        meta = fusion_metadata(
+            self.NAMES,
+            base_model=info["base_model"],
+            architecture=info["architecture"],
+            gray_weights=info["gray_weights"],
+            gray_class_names=info["gray_class_names"],
+        )
+        path = save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+        loaded_meta = read_fusion_metadata(path)
+        assert loaded_meta.architecture == "yolov8n-cls"
+        restored = rebuild_gray_backbone(loaded_meta, "cpu")
+        assert fake_ultralytics.YOLO.last_weights == str(weights)
+        assert restored.perm.tolist() == [0, 2, 1, 3]
+
+
 class TestFusionClassifier:
     """FusionClassifier must rebuild the checkpoint's gray branch and
     classify FusionSampleInput batches (the engine's fusion contract)."""
@@ -626,12 +730,21 @@ class TestFusionClassifier:
         model = PolarFusionModel(backbone, num_classes=4)
         meta = fusion_metadata(
             self.V3_NAMES,
-            base_model="yolov8n-cls",
+            base_model=info["base_model"],
             imgsz=16,
-            gray_weights=str(weights),
+            architecture=info["architecture"],
+            gray_weights=info["gray_weights"],
             gray_class_names=info["gray_class_names"],
         )
         return save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+
+    def test_device_id_zero_maps_to_cuda(self, tmp_path, fake_ultralytics):
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+        path = self._save_checkpoint(tmp_path, fake_ultralytics)
+        clf = FusionClassifier(path, device="0")
+        assert clf.device == "cuda:0"
+        assert next(clf.model.parameters()).is_cuda
 
     def test_predict_batch_roundtrip(self, tmp_path, fake_ultralytics):
         path = self._save_checkpoint(tmp_path, fake_ultralytics)
@@ -762,6 +875,71 @@ class TestGrayPreservationTraining:
             )
 
 
+class TestLegacyArchitectureGate:
+    """Formal training requires YOLO26 gray weights; legacy (yolov8n-cls)
+    weights are comparison-only behind --legacy-gray-weights."""
+
+    @staticmethod
+    def _fake_prepare(architecture):
+        def fake_prepare(base, gray_weights, names, device):
+            return tpf.GrayBackboneAdapter(
+                tpf._StructureStubBackbone(len(names))
+            ), {
+                "base_model": "base.pt",
+                "architecture": architecture,
+                "gray_weights": str(gray_weights),
+                "head_replaced": False,
+                "perm": None,
+                "gray_class_names": list(names),
+            }
+
+        return fake_prepare
+
+    def _argv(self, run_id, mini_dataset, extra=()):
+        return [
+            "--run-id", run_id,
+            "--data", str(mini_dataset),
+            "--epochs", "1",
+            "--batch", "4",
+            "--gray-weights", "some-gray.pt",
+            *extra,
+        ]
+
+    def test_non_yolo26_gray_weights_refused_without_legacy_flag(
+        self, mini_dataset, monkeypatch
+    ):
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: None)
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+        monkeypatch.setattr(tpf, "prepare_gray_backbone", self._fake_prepare("yolov8n-cls"))
+        with pytest.raises(ValueError, match="legacy-gray-weights"):
+            tpf.run_training(tpf.parse_args(self._argv("test_legacy_gate", mini_dataset)))
+
+    def test_legacy_and_yolo26_weights_train_with_respective_flags(
+        self, mini_dataset, monkeypatch
+    ):
+        run_ids = []
+        try:
+            monkeypatch.setattr(tpf, "validate_dataset", lambda root: {})
+            monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+
+            monkeypatch.setattr(tpf, "prepare_gray_backbone", self._fake_prepare("yolov8n-cls"))
+            run_id = "test_legacy_gate_ok"
+            run_ids.append(run_id)
+            tpf.run_training(
+                tpf.parse_args(self._argv(run_id, mini_dataset, ("--legacy-gray-weights",)))
+            )
+
+            monkeypatch.setattr(tpf, "prepare_gray_backbone", self._fake_prepare("yolo26n-cls"))
+            run_id = "test_yolo26_gate_ok"
+            run_ids.append(run_id)
+            tpf.run_training(tpf.parse_args(self._argv(run_id, mini_dataset)))
+        finally:
+            for run_id in run_ids:
+                shutil.rmtree(
+                    tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True
+                )
+
+
 class TestEvalScript:
     def test_missing_checkpoint_exits_nonzero(self):
         import scripts.eval_polar_fusion as epf
@@ -774,4 +952,4 @@ class TestEvalScript:
         args = epf.parse_args(["--checkpoint", "x.pt"])
         assert args.split == "test"
         assert args.device == "cpu"
-        assert args.data == "datasets/underwater_cls_fusion_v3"
+        assert args.data == "datasets/underwater_cls_fusion_v4_band"

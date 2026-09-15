@@ -1,4 +1,5 @@
-"""Train the Polar Fusion classification model on the V3 fusion dataset.
+"""Train the Polar Fusion classification model on the band-matched fusion
+dataset (V4).
 
 Phases:
     freeze : train only the polar delta head and the quality gate on top of
@@ -39,6 +40,7 @@ from core.fusion_dataset import (
     QUALITY_VECTOR_LENGTH,
     dataset_fingerprint,
     load_fusion_sample,
+    verify_dataset_integrity,
 )
 from models.polar_fusion import (
     DEFAULT_BASE_MODEL,
@@ -60,11 +62,13 @@ from models.polar_fusion import (
 from scripts.train_models import DeviceUnavailableError, InvalidRunIdError, resolve_device, validate_run_id
 
 DEFAULT_SEED = 2026
-DEFAULT_DATA = "datasets/underwater_cls_fusion_v3"
+DEFAULT_DATA = "datasets/underwater_cls_fusion_v4_band"
 DEFAULT_PHASE = "freeze"
 PHASES = ("freeze", "joint")
-# Accepted 4-class gray Model B used to initialize the fusion gray branch.
-DEFAULT_GRAY_WEIGHTS = "runs/train/run_20260913_initial/model_b-gray/weights/best.pt"
+# No default gray weights: the formal gray branch must come from a trained
+# YOLO26 gray Model B passed explicitly via --gray-weights. The legacy
+# YOLOv8 weights are comparison-only and additionally require
+# --legacy-gray-weights.
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -81,10 +85,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--gray-weights",
-        default=DEFAULT_GRAY_WEIGHTS,
-        help="Accepted 4-class gray Model B checkpoint initializing the gray "
-        "branch (default: the formal run_20260913_initial weights). Pass an "
-        "empty string to start from a freshly replaced classification head.",
+        default=None,
+        help="Trained YOLO26 gray Model B checkpoint initializing the gray "
+        "branch (required for formal freeze training). Pass an empty string "
+        "together with --allow-untrained-gray to start from a freshly "
+        "replaced classification head.",
     )
     parser.add_argument(
         "--init-from",
@@ -126,6 +131,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Explicitly allow --phase freeze with a fresh (untrained) gray "
         "head from the base checkpoint. Refused otherwise: the formal gray "
         "branch must come from a trained gray Model B.",
+    )
+    parser.add_argument(
+        "--legacy-gray-weights",
+        action="store_true",
+        help="Explicitly allow non-YOLO26 gray weights (e.g. the legacy "
+        "yolov8n-cls Model B) for comparison runs. Formal training "
+        "requires YOLO26 gray weights.",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
@@ -178,11 +190,18 @@ def validate_dataset(data_root: Path, require_audit: bool = True) -> dict:
         audit = json.loads(audit_path.read_text(encoding="utf-8"))
         report["audit_passed"] = bool(audit.get("audit_passed", False))
         report["audit_fingerprint"] = dataset_fingerprint(data_root)
-        if require_audit and not report["audit_passed"]:
-            raise ValueError(
-                f"dataset audit did not pass ({audit_path}); regenerate or "
-                "re-audit the dataset before training"
-            )
+        if require_audit:
+            if not report["audit_passed"]:
+                raise ValueError(
+                    f"dataset audit did not pass ({audit_path}); regenerate or "
+                    "re-audit the dataset before training"
+                )
+            # The audit verdict alone proves nothing about the current file
+            # contents; re-verify every npz against the audit-time digests.
+            integrity = verify_dataset_integrity(data_root)
+            report["integrity_verified_files"] = integrity["verified_files"]
+        else:
+            report["integrity_verified_files"] = None
     elif require_audit:
         raise FileNotFoundError(
             f"missing dataset audit report: {audit_path}; run "
@@ -277,6 +296,13 @@ def dry_run(args: argparse.Namespace) -> int:
         print(
             "NOTE: with pretrained --gray-weights the base checkpoint is "
             "not needed (the loaded weights carry their own architecture).",
+            file=sys.stderr,
+        )
+    if not args.gray_weights:
+        print(
+            "NOTE: no --gray-weights provided; formal freeze training "
+            "requires a trained YOLO26 gray Model B checkpoint (pass "
+            "--gray-weights, or --allow-untrained-gray to start untrained).",
             file=sys.stderr,
         )
     if args.gray_weights and not gray_weights_present:
@@ -446,8 +472,19 @@ def _restore_backbone(
     return rebuild_gray_backbone(metadata, device)
 
 
+def _set_seed(seed: int) -> None:
+    """Seed python/numpy/torch RNGs so a declared seed actually reproduces
+    model init and (via the DataLoader generator) shuffle order."""
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def run_training(args: argparse.Namespace) -> Path:
     """Full training loop (freeze or joint). Not executed by --dry-run."""
+    _set_seed(args.seed)
     data_root = PROJECT_ROOT / args.data if not Path(args.data).is_absolute() else Path(args.data)
     dataset_report = validate_dataset(data_root)
 
@@ -461,10 +498,10 @@ def run_training(args: argparse.Namespace) -> Path:
     if init_checkpoint is None:
         if args.phase == "freeze" and not args.gray_weights and not args.allow_untrained_gray:
             raise ValueError(
-                "--phase freeze with a fresh untrained gray head is refused; "
-                "the formal gray branch must come from a trained gray Model B "
-                "(pass --gray-weights) or override explicitly with "
-                "--allow-untrained-gray"
+                "--phase freeze without --gray-weights is refused: the formal "
+                "gray branch must come from a trained YOLO26 gray Model B. "
+                "Pass --gray-weights, or --allow-untrained-gray together with "
+                "--gray-weights '' to explicitly start untrained."
             )
         gray_weights = args.gray_weights
         base_path = Path(args.base)
@@ -479,12 +516,24 @@ def run_training(args: argparse.Namespace) -> Path:
         backbone, gray_info = prepare_gray_backbone(
             base_path, gray_weights, class_names, device
         )
+        if (
+            gray_info["gray_weights"]
+            and not gray_info["architecture"].startswith("yolo26")
+            and not args.legacy_gray_weights
+        ):
+            raise ValueError(
+                f"gray weights architecture {gray_info['architecture']!r} is "
+                "not YOLO26; formal training requires a trained YOLO26 gray "
+                "Model B (--gray-weights). Pass --legacy-gray-weights to use "
+                "legacy weights for explicit comparison runs only."
+            )
         _verify_backbone_output(backbone, args.imgsz, num_classes, device)
         model = PolarFusionModel(backbone, num_classes=num_classes).to(device)
         metadata: FusionCheckpointMetadata = fusion_metadata(
             class_names,
             base_model=gray_info["base_model"],
             imgsz=args.imgsz,
+            architecture=gray_info["architecture"],
             gray_weights=gray_info["gray_weights"],
             gray_class_names=gray_info["gray_class_names"],
             head_replaced=gray_info["head_replaced"],
@@ -535,6 +584,7 @@ def run_training(args: argparse.Namespace) -> Path:
         batch_size=args.batch,
         shuffle=True,
         num_workers=0 if sys.platform == "win32" else 8,
+        generator=torch.Generator().manual_seed(args.seed),
     )
     val_loader = torch.utils.data.DataLoader(
         FusionClsDataset(val_paths, imgsz=args.imgsz),

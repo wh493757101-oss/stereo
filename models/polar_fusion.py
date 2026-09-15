@@ -329,9 +329,11 @@ def prepare_gray_backbone(
             )
         perm = build_gray_class_perm(module.names, class_names)
         info = {
-            # The architecture is whatever the loaded weights carry (e.g.
-            # yolov8n-cls for the legacy run), not the requested --base.
-            "base_model": architecture_name(module) or str(weights_path.name),
+            # base_model is the reconstruction source path; architecture is
+            # the family name derived from the loaded checkpoint's yaml
+            # (e.g. yolov8n-cls for the legacy run).
+            "base_model": str(weights_path),
+            "architecture": architecture_name(module),
             "gray_weights": str(weights_path),
             "head_replaced": False,
             "perm": perm,
@@ -345,8 +347,12 @@ def prepare_gray_backbone(
         # The replaced head's class order is now the dataset order.
         module.names = {i: name for i, name in enumerate(class_names)}
         perm = None
+        resolved_base = Path(base_path)
+        if not resolved_base.is_absolute():
+            resolved_base = PROJECT_ROOT / resolved_base
         info = {
-            "base_model": architecture_name(module) or Path(str(base_path)).name,
+            "base_model": str(resolved_base),
+            "architecture": architecture_name(module),
             "gray_weights": "",
             "head_replaced": True,
             "perm": None,
@@ -365,11 +371,12 @@ def _resolve_project_path(value: str | Path) -> Path:
 class FusionCheckpointMetadata:
     """Audit metadata for a fusion checkpoint.
 
-    ``base_model`` records the architecture the gray branch was actually
-    built from (derived from the loaded checkpoint's yaml, e.g.
-    ``yolov8n-cls`` for the legacy weights), never the requested default.
-    ``gray_weights`` is the path of the pretrained 4-class gray checkpoint
-    loaded into the branch (empty string for a fresh-head build).
+    ``base_model`` is the reconstruction source path: the base checkpoint a
+    fresh-head build was created from (``head_replaced=True``), or the gray
+    weights path otherwise. ``architecture`` is the architecture family the
+    gray branch actually carries (derived from the loaded checkpoint's
+    yaml, e.g. ``yolov8n-cls`` for the legacy weights) — the two are
+    recorded separately because the architecture name is not a file path.
     """
 
     version: str
@@ -378,6 +385,7 @@ class FusionCheckpointMetadata:
     base_model: str
     quality_vector_keys: tuple[str, ...]
     imgsz: int
+    architecture: str = ""
     gray_weights: str = ""
     gray_class_names: tuple[str, ...] = ()
     head_replaced: bool = False
@@ -388,6 +396,7 @@ def fusion_metadata(
     class_names: Sequence[str],
     base_model: str = DEFAULT_BASE_MODEL,
     imgsz: int = 224,
+    architecture: str = "",
     gray_weights: str = "",
     gray_class_names: Sequence[str] = (),
     head_replaced: bool = False,
@@ -400,6 +409,7 @@ def fusion_metadata(
         base_model=str(base_model),
         quality_vector_keys=tuple(QUALITY_VECTOR_KEYS),
         imgsz=int(imgsz),
+        architecture=str(architecture),
         gray_weights=str(gray_weights),
         gray_class_names=tuple(str(name) for name in gray_class_names),
         head_replaced=bool(head_replaced),
@@ -427,6 +437,7 @@ def save_fusion_checkpoint(
         "base_model": metadata.base_model,
         "quality_vector_keys": list(metadata.quality_vector_keys),
         "imgsz": metadata.imgsz,
+        "architecture": metadata.architecture,
         "gray_weights": metadata.gray_weights,
         "gray_class_names": list(metadata.gray_class_names),
         "head_replaced": metadata.head_replaced,
@@ -452,6 +463,7 @@ def _metadata_from_payload(path: str | Path, payload: dict[str, Any]) -> FusionC
         base_model=str(payload["base_model"]),
         quality_vector_keys=tuple(payload["quality_vector_keys"]),
         imgsz=int(payload.get("imgsz", 224)),
+        architecture=str(payload.get("architecture", "")),
         gray_weights=str(payload.get("gray_weights", "")),
         gray_class_names=tuple(str(n) for n in payload.get("gray_class_names", ())),
         head_replaced=bool(payload.get("head_replaced", False)),
@@ -634,9 +646,9 @@ class FusionClassifier:
     def __init__(self, checkpoint: str | Path, device: str = "cpu"):
         self.device = torch_device_name(device)
         self.metadata = read_fusion_metadata(checkpoint)
-        backbone = rebuild_gray_backbone(self.metadata, device)
+        backbone = rebuild_gray_backbone(self.metadata, self.device)
         self.model, self.metadata, _ = load_fusion_checkpoint(checkpoint, backbone)
-        self.model.to(device).eval()
+        self.model.to(self.device).eval()
         self.class_names = list(self.metadata.class_names)
         self.imgsz = int(self.metadata.imgsz)
 

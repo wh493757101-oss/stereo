@@ -1,4 +1,4 @@
-"""Evaluate a trained Polar Fusion checkpoint on the V3 test split.
+"""Evaluate a trained Polar Fusion checkpoint on the fusion test split.
 
 Loads a checkpoint written by ``scripts/train_polar_fusion.py``, rebuilds
 the fusion model around a freshly loaded gray backbone (the architecture
@@ -53,8 +53,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--data",
-        default="datasets/underwater_cls_fusion_v3",
-        help="V3 fusion dataset root (default: %(default)s).",
+        default="datasets/underwater_cls_fusion_v4_band",
+        help="Fusion dataset root (default: %(default)s).",
     )
     parser.add_argument("--split", default="test", choices=["train", "val", "test"])
     parser.add_argument("--device", default="cpu")

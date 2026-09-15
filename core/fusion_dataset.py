@@ -42,21 +42,72 @@ QUALITY_VECTOR_LENGTH = len(QUALITY_VECTOR_KEYS)
 
 
 def dataset_fingerprint(data_root: str | Path) -> str:
-    """Stable sha256 over the manifest and the audit report.
+    """Stable sha256 over manifest, audit report and generation summary.
 
     Training runs record this so a checkpoint can be traced back to the
-    exact dataset state it was trained on.
+    exact dataset state it was trained on. The audit report itself carries
+    the per-file content digests, so the fingerprint transitively covers
+    every npz sample's audited content.
     """
     import hashlib
 
     data_root = Path(data_root)
     digest = hashlib.sha256()
-    for name in ("dataset_manifest.csv", "dataset_audit.json"):
+    for name in (
+        "dataset_manifest.csv",
+        "dataset_audit.json",
+        "dataset_summary.json",
+    ):
+        path = data_root / name
+        if not path.is_file():
+            continue  # summary is optional for hand-assembled datasets
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
-        digest.update((data_root / name).read_bytes())
+        digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def file_digest(path: str | Path) -> str:
+    """sha256 hex digest of one file's bytes."""
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def verify_dataset_integrity(data_root: str | Path) -> dict:
+    """Re-verify every npz against the digests recorded at audit time.
+
+    The audit report (``dataset_audit.json``) stores each sample's sha256;
+    this recomputes them so a modified, replaced or deleted npz is caught
+    before training even though the historic ``audit_passed`` verdict is
+    unchanged. Raises on any mismatch.
+    """
+    import json
+
+    data_root = Path(data_root)
+    audit = json.loads((data_root / "dataset_audit.json").read_text(encoding="utf-8"))
+    digests = audit.get("file_digests")
+    if not digests:
+        raise ValueError(
+            f"{data_root / 'dataset_audit.json'} records no per-file "
+            "digests; re-run the dataset audit before training"
+        )
+    missing = []
+    changed = []
+    for relative, expected in digests.items():
+        path = data_root / relative
+        if not path.is_file():
+            missing.append(relative)
+        elif file_digest(path) != expected:
+            changed.append(relative)
+    if missing or changed:
+        raise ValueError(
+            "dataset files changed since the audit passed: "
+            f"missing={missing[:10]} changed={changed[:10]}; "
+            "regenerate or re-audit the dataset before training"
+        )
+    return {"verified_files": len(digests)}
 
 
 @dataclasses.dataclass(frozen=True)

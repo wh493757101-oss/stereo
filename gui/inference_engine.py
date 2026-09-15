@@ -32,6 +32,10 @@ import numpy as np
 import torch
 import yaml
 
+from core.fusion_dataset import (
+    QUALITY_VECTOR_LENGTH,
+    quality_vector_from_result,
+)
 from core.polar_compute import (
     PolarFeatureResult,
     build_polar_yolo_image,
@@ -46,6 +50,7 @@ from core.stereo_matching import (
     to_gray_u8,
 )
 from models.classification import ClassificationModel, ClassificationResult
+from models.polar_fusion import FusionClassifier, FusionSampleInput
 from models.segmentation import Instance, SegmentationModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +59,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 DEFAULT_BASELINE_M = 0.09890970798524992
 DEFAULT_FOCAL_PX = 3643.5231322766995
 
-MODEL_B_INPUT_MODES = ("gray", "polar")
+MODEL_B_INPUT_MODES = ("gray", "polar", "fusion")
 
 STAGE_TIMING_KEYS = (
     "model_a_s",
@@ -84,6 +89,12 @@ class DetailedInferenceResult:
     instance pixels with a trustworthy polarization measurement (the "polar
     gate": 0 whenever sync was exceeded, matching failed or too few pixels
     were valid).
+
+    ``polar_result`` is the full frame-level :class:`PolarFeatureResult`
+    (None when no polar computation ran), and ``fusion_inputs`` holds one
+    :class:`FusionSampleInput` per instance (None for empty crops) with the
+    gray/polar crops, the 4-dim quality vector and the ``polar_invalid``
+    flag — the exact contract the fusion model consumes.
     """
 
     left_gray: np.ndarray
@@ -95,6 +106,10 @@ class DetailedInferenceResult:
     already_rectified: bool = False
     timings: dict[str, float] = dataclasses.field(default_factory=dict)
     polar_quality: list[dict] = dataclasses.field(default_factory=list)
+    polar_result: PolarFeatureResult | None = None
+    fusion_inputs: list[FusionSampleInput | None] = dataclasses.field(
+        default_factory=list
+    )
 
 
 def resolve_device(requested: str = "auto") -> str:
@@ -226,11 +241,16 @@ class DualStageInferenceEngine:
         if model_b is not None:
             self.model_b = model_b
         elif model_b_path is not None:
-            self.model_b = ClassificationModel(
-                model_path=model_b_path,
-                device=self.device,
-                imgsz=model_b_imgsz,
-            )
+            if input_mode == "fusion":
+                # Fusion checkpoints carry imgsz and the quality-vector
+                # contract in their metadata; model_b_imgsz does not apply.
+                self.model_b = FusionClassifier(model_b_path, device=self.device)
+            else:
+                self.model_b = ClassificationModel(
+                    model_path=model_b_path,
+                    device=self.device,
+                    imgsz=model_b_imgsz,
+                )
         else:
             self.model_b = None
 
@@ -397,9 +417,15 @@ class DualStageInferenceEngine:
                 _polar_quality_record(inst.id, reason="sync_skew_exceeded")
                 for inst in instances
             ]
+            fusion_inputs = [
+                self._instance_fusion_input(inst, left_gray, None, polar_invalid=True)
+                for inst in instances
+            ]
             if self.model_b is not None:
                 started = time.perf_counter()
-                instances = self._classify(instances, left_gray, polar_map)
+                instances = self._classify(
+                    instances, left_gray, polar_map, fusion_inputs
+                )
                 timings["model_b_s"] = time.perf_counter() - started
             timings["total_s"] = time.perf_counter() - frame_started
             return DetailedInferenceResult(
@@ -412,6 +438,7 @@ class DualStageInferenceEngine:
                 already_rectified=bool(already_rectified),
                 timings=timings,
                 polar_quality=polar_quality,
+                fusion_inputs=fusion_inputs,
             )
 
         # One band-restricted dense computation per frame; every instance
@@ -485,9 +512,21 @@ class DualStageInferenceEngine:
         ]
         timings["polar_s"] = time.perf_counter() - started
 
+        # Per-instance fusion inputs (gray/polar crops, 4-dim quality,
+        # polar_invalid): the exact contract a fusion Model B consumes.
+        fusion_inputs = [
+            self._instance_fusion_input(
+                inst,
+                left_gray,
+                polar_result,
+                polar_invalid=not stats_by_id[inst.id].valid,
+            )
+            for inst in instances
+        ]
+
         if self.model_b is not None:
             started = time.perf_counter()
-            instances = self._classify(instances, left_gray, polar_map)
+            instances = self._classify(instances, left_gray, polar_map, fusion_inputs)
             timings["model_b_s"] = time.perf_counter() - started
 
         timings["total_s"] = time.perf_counter() - frame_started
@@ -501,6 +540,8 @@ class DualStageInferenceEngine:
             already_rectified=bool(already_rectified),
             timings=timings,
             polar_quality=polar_quality,
+            polar_result=polar_result,
+            fusion_inputs=fusion_inputs,
         )
 
     def _classify(
@@ -508,23 +549,26 @@ class DualStageInferenceEngine:
         instances: list[Instance],
         left_gray: np.ndarray,
         polar_map: np.ndarray,
+        fusion_inputs: list[FusionSampleInput | None] | None = None,
     ) -> list[Instance]:
-        """Run Model B crops for material classification.
+        """Run Model B for material classification.
 
-        ``polar`` mode classifies [gray, polar, gray]; ``gray`` mode
-        classifies [gray, gray, gray]. Crop geometry is identical in both
-        modes. When the injected Model B exposes ``predict_batch`` all crops
-        are classified in one call; otherwise the legacy per-crop interface
-        is used.
+        ``fusion`` mode classifies the per-instance fusion inputs built by
+        :meth:`_instance_fusion_input`; ``polar`` mode classifies
+        [gray, polar, gray]; ``gray`` mode classifies [gray, gray, gray].
+        Crop geometry is identical in all modes. When the injected Model B
+        exposes ``predict_batch`` all crops are classified in one call;
+        otherwise the legacy per-crop interface is used.
         """
+        if self.model_b_input_mode == "fusion":
+            return self._classify_fusion(instances, fusion_inputs or [])
+
         height, width = left_gray.shape
         crops: list[np.ndarray | None] = []
         for inst in instances:
-            x1, y1, x2, y2 = inst.bbox
-            x1p = max(0, x1 - self.crop_padding)
-            y1p = max(0, y1 - self.crop_padding)
-            x2p = min(width, x2 + self.crop_padding)
-            y2p = min(height, y2 + self.crop_padding)
+            y1p, y2p, x1p, x2p = _crop_window(
+                inst.bbox, height, width, self.crop_padding
+            )
 
             crop_gray = left_gray[y1p:y2p, x1p:x2p]
             if crop_gray.size == 0:
@@ -556,10 +600,88 @@ class DualStageInferenceEngine:
             updated.append(inst)
         return updated
 
+    def _classify_fusion(
+        self,
+        instances: list[Instance],
+        fusion_inputs: list[FusionSampleInput | None],
+    ) -> list[Instance]:
+        """Run the fusion classifier over the per-instance fusion inputs."""
+        if not any(sample is not None for sample in fusion_inputs):
+            return list(instances)
+        results = self.model_b.predict_batch(fusion_inputs)
+        updated = []
+        for inst, result in zip(instances, results):
+            if result.valid:
+                inst.class_id = int(result.class_id)
+                inst.class_name = result.class_name or f"class_{result.class_id}"
+                inst.confidence = round(float(result.confidence), 3)
+            updated.append(inst)
+        return updated
+
+    def _instance_fusion_input(
+        self,
+        inst: Instance,
+        left_gray: np.ndarray,
+        polar_result: PolarFeatureResult | None,
+        polar_invalid: bool,
+    ) -> FusionSampleInput | None:
+        """Build the fusion model's input record for one instance.
+
+        Crops use the same padded-bbox window as the other Model B modes.
+        Quality comes from :func:`quality_vector_from_result` over the
+        instance mask (includes ``mean_abs_q``); without a polar result all
+        polar channels and the quality vector are zero and the gate input
+        is marked invalid.
+        """
+        height, width = left_gray.shape
+        y1p, y2p, x1p, x2p = _crop_window(
+            inst.bbox, height, width, self.crop_padding
+        )
+        crop_gray = left_gray[y1p:y2p, x1p:x2p]
+        if crop_gray.size == 0:
+            return None
+        if polar_result is None:
+            crop_signed = np.zeros(crop_gray.shape, dtype=np.float32)
+            crop_abs = np.zeros(crop_gray.shape, dtype=np.float32)
+            crop_valid = np.zeros(crop_gray.shape, dtype=np.uint8)
+            quality = np.zeros(QUALITY_VECTOR_LENGTH, dtype=np.float32)
+        else:
+            crop_signed = polar_result.signed_q[y1p:y2p, x1p:x2p]
+            crop_abs = polar_result.abs_q[y1p:y2p, x1p:x2p]
+            crop_valid = polar_result.valid_mask[y1p:y2p, x1p:x2p]
+            quality, _ = quality_vector_from_result(polar_result, inst.mask)
+            # The frame-level polar result is computed over the union of all
+            # instance masks, so a crop window can contain pixels belonging
+            # to neighboring instances. Offline samples are generated per
+            # instance mask; restrict the crop to this instance's mask so
+            # training and inference see the same input distribution.
+            mask_crop = np.asarray(inst.mask)[y1p:y2p, x1p:x2p] > 0
+            crop_signed = crop_signed * mask_crop
+            crop_abs = crop_abs * mask_crop
+            crop_valid = (crop_valid & mask_crop).astype(np.uint8)
+        return FusionSampleInput(
+            gray=crop_gray,
+            signed_q=crop_signed.astype(np.float32),
+            abs_q=crop_abs.astype(np.float32),
+            valid=crop_valid,
+            quality=quality,
+            polar_invalid=polar_invalid,
+        )
+
 
 def _gray_bgr_copy(gray: np.ndarray) -> np.ndarray:
     """3-channel copy of a grayscale image: Model A's standard input."""
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
+def _crop_window(bbox, height: int, width: int, padding: int) -> tuple[int, int, int, int]:
+    """Padded clip-to-image window (y1, y2, x1, x2) for an instance bbox."""
+    x1, y1, x2, y2 = bbox
+    y1p = max(0, y1 - padding)
+    x1p = max(0, x1 - padding)
+    y2p = min(height, y2 + padding)
+    x2p = min(width, x2 + padding)
+    return y1p, y2p, x1p, x2p
 
 
 def _predict_kwargs(imgsz: int | None) -> dict[str, Any]:
