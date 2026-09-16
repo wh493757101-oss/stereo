@@ -2,51 +2,82 @@
 
 ## Operating model
 
-Use Codex as the principal agent and Claude Code as an external execution agent through the project-local `$claude-worker` skill.
+Codex is a read-only planning, architecture, and review agent. Claude Code is
+the implementation and execution agent, used only through a prompt that the
+user manually copies into Claude Code.
 
-- Codex owns requirement interpretation, architecture, planning, task boundaries, risk decisions, and final acceptance.
-- Claude Code performs bounded execution work such as repository exploration, local information gathering, implementation, test creation, test execution, and failure diagnosis.
-- Treat Claude Code's report as evidence. Codex must inspect the actual result and make the final decision.
+The normal workflow is:
 
-## Standing authorization
+```text
+User requirement
+  -> Codex discussion and repository inspection
+  -> Codex/user agree on the design and acceptance criteria
+  -> Codex generates one self-contained Claude Code prompt
+  -> User manually copies the prompt into Claude Code
+  -> Claude Code implements and validates the task
+  -> User brings the result back to Codex for review
+```
 
-The user authorizes Codex to invoke `$claude-worker` automatically for matching tasks in this project without asking for confirmation before every invocation. This standing authorization permits use of the configured Claude Code and CC-Switch/TokenPlan path, but it does not expand the scope of the user's current request.
+Codex must not automatically invoke Claude Code, create Claude worker jobs, or
+delegate through a local runner. Codex must not modify project files or
+implement the plan. Its project interaction is limited to read-only inspection,
+planning, prompt generation, and post-execution review.
 
-The user's current instruction always takes precedence. Do not invoke Claude Code when the user says to plan only, not to execute, not to use Claude, or not to spend external tokens. Briefly announce each real Claude invocation before starting it.
+The default state is planning and discussion. Codex should continue refining
+requirements, architecture, scope, risks, validation, and acceptance criteria
+without generating a Claude Code execution prompt. Codex may generate the
+copy-ready Claude Code prompt only after the user clearly signals execution,
+for example: “按这个执行”, “就这样做”, “开始执行”, “生成给 Claude Code 的
+提示词”, or an unambiguous equivalent. Questions, brainstorming, and plan
+reviews without such a signal remain planning mode. An execution signal causes
+Codex to generate the prompt only; it does not authorize Codex to edit files.
 
-## Delegate to Claude Code when
+## Planning and plan freeze
 
-Use `$claude-worker` by default for substantial execution work, including:
+Before the plan is finalized, Codex may inspect relevant files, trace behavior,
+compare designs, identify risks, define validation commands, and refine the
+architecture with the user.
 
-- searching or reading multiple project files to map behavior, dependencies, or call paths;
-- collecting and summarizing information already available in the local project;
-- implementing features, bug fixes, refactors, migrations, or documentation changes;
-- writing or updating tests and running narrowly scoped validation commands;
-- investigating build or test failures;
-- performing a bounded implementation review when an independent execution pass is useful.
+When the user confirms the plan or asks for a Claude Code prompt, Codex freezes
+the final objective, decisions, scope, constraints, validation, and acceptance
+criteria. The generated prompt must be self-contained and must not refer to
+unavailable prior conversation such as “implement the plan above”.
 
-Codex may perform the minimum local inspection needed to understand the request, define a safe task, and verify the result. Codex should keep architectural choices, tradeoff decisions, prioritization, acceptance criteria, and final review for itself.
+## Claude Code prompt requirements
 
-Do not delegate when the request can be answered from the conversation alone, when only a decision or plan is requested, or when delegation would add no meaningful execution value.
+The copy-ready prompt should state:
 
-## Delegation procedure
+- the task and observable objective;
+- only the necessary project context;
+- approved design decisions that must not be silently changed;
+- files or areas to inspect and modify;
+- prohibited changes and safety constraints;
+- implementation details Claude may choose independently;
+- exact validation commands;
+- objective acceptance criteria;
+- a concise completion report containing changed files, implementation notes,
+  validation results, and remaining risks.
 
-For every invocation:
+Claude Code should inspect the actual repository before editing. If repository
+evidence makes an approved architectural decision impossible or unsafe, it
+should stop and report the conflict instead of silently redesigning the task.
 
-1. Codex first defines one observable outcome, allowed read and write scope, constraints, prohibited actions, and exact validation commands.
-2. Codex creates the task file only under `.agents/skills/claude-worker/runs/` using the skill's task template.
-3. Use `Analyze` for read-only exploration, local information collection, diagnosis, or review. Use `Implement` only when the user's current request authorizes project changes.
-4. Grant only the narrowly scoped Bash command families required for validation. Never grant general `Bash` or `Bash(*)` access.
-5. Run no more than one write-capable Claude worker at a time in this working directory.
-6. After Claude returns, Codex inspects the actual files and diff when Git is available, then independently reruns the key acceptance checks.
-7. If correction is needed, Codex may issue one bounded retry within the original scope. Otherwise, report the blocker instead of silently completing the work itself through another provider.
-8. The final response distinguishes Claude's work from Codex's verification and lists remaining risks.
+## Scope and safety
 
-## Boundaries
+- Do not add dependencies, change public behavior, or expand scope unless the
+  prompt explicitly authorizes it.
+- Do not expose credentials, API keys, login state, or provider configuration
+  in prompts or reports.
+- Do not modify Codex, Claude Code, CC-Switch, or other global configuration as
+  part of a project task unless explicitly requested.
+- Do not commit, push, reset, clean, checkout, or switch Git state unless the
+  user explicitly requests that operation.
+- Keep implementation and validation focused on the current project.
 
-- The current worker may inspect local project information but may not use web search or external networks.
-- Do not expose credentials, environment dumps, login state, API keys, or TokenPlan configuration to task files or model output.
-- Do not let Claude Code modify Codex, Claude Code, or CC-Switch global configuration.
-- Do not let Claude Code install dependencies or commit, push, reset, clean, checkout, or switch Git state.
-- Do not let Claude Code modify files outside the scope authorized by the user's current request.
+## Review after manual execution
 
+When the user brings back Claude Code's result, Codex remains responsible for
+the final decision. Codex should read the actual files and diff, review the
+reported validation, and identify any missing checks or follow-up work. Codex
+must communicate corrections as a new self-contained Claude Code prompt rather
+than editing the project itself.

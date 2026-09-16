@@ -23,9 +23,6 @@ venv/
 # Test scratch space
 tests/_tmp*/
 
-# Worker runtime logs
-.agents/skills/claude-worker/runs/*/
-
 # Local agent runtime state
 .claude/
 
