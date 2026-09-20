@@ -427,6 +427,23 @@ def build_fusion_dataset(
                 crop_abs = np.zeros(crop_gray.shape, dtype=np.float32)
                 crop_valid = np.zeros(crop_gray.shape, dtype=np.uint8)
 
+            # valid_mask is mask-restricted (object_mask above) and the crop
+            # window covers the whole polygon bbox, so every valid pixel
+            # must lie inside the crop. If a crop configuration cuts them
+            # the recorded mean_abs_q can no longer be verified from the
+            # crop; refuse explicitly instead of writing unverifiable data.
+            if polar_result is not None and int(crop_valid.sum()) != int(
+                polar_result.valid_mask.sum()
+            ):
+                raise ValueError(
+                    f"crop window cuts valid polar pixels for "
+                    f"{row.output_stem}_obj{object_index:03d}: "
+                    f"{int(crop_valid.sum())} of "
+                    f"{int(polar_result.valid_mask.sum())} valid pixels are "
+                    "inside the window; the mean_abs_q audit cannot verify "
+                    "such samples (increase --crop-pad)"
+                )
+
             sample_name = f"{row.output_stem}_obj{object_index:03d}"
             relative = Path(row.split) / class_name / f"{sample_name}.npz"
             save_fusion_sample(
@@ -665,13 +682,34 @@ def _check_npz_quality(sample, record: FusionSampleRecord) -> str | None:
     """Cross-check the npz quality vector (the training gate input) against
     the manifest record and the sample arrays themselves.
 
-    Recomputing the mask-level ratios from the crop alone is impossible
-    (the instance mask is not stored in the npz), so the exact ratios are
-    checked against the manifest and the arrays are checked for the sound
-    boundary invariants listed below. Returns a failure reason or None.
+    Checks, in order:
+
+    1. npz quality == manifest quality (6-decimal text tolerance).
+    2. All four entries lie within [0, 1].
+    3. Zero valid pixels in the crop: valid_ratio and mean_abs_q must both
+       be exactly 0 (valid pixels are mask-restricted and the crop window
+       covers the whole mask, so an empty crop-valid set means an empty
+       mask-valid set). in_bounds_ratio and brightness_valid_ratio are
+       independent per-pixel measurements and are validated by their own
+       definitions ([0, 1] range), NOT forced to zero: an all-black pair
+       is fully in bounds with zero brightness-valid pixels, i.e.
+       quality = [0, 1, 0, 0] is legitimate.
+    4. Valid pixels present: valid_ratio must be positive, and the
+       containment relations implied by the valid-pixel definition must
+       hold on the stored float32 values (exact comparison, equality is
+       legal): valid_ratio <= in_bounds_ratio and
+       valid_ratio <= brightness_valid_ratio, because a valid pixel is
+       necessarily in bounds and bright enough to measure. The instance
+       mask is not stored in the npz, so the three ratios cannot be
+       recomputed exactly from the crop; these relations are the strongest
+       ratio check available without the mask.
+    5. Valid pixels present: mean_abs_q is recomputed from the crop with
+       rtol=0. Offline valid is mask-restricted and the crop window always
+       contains the full instance mask, so the crop's valid pixels are
+       exactly the pixels that entered the recorded mask-level mean;
+       1e-6 covers float32 accumulation differences, 1.5e-6 additionally
+       covers the manifest's 6-decimal text rounding.
     """
-    # 1. npz quality must equal the manifest's recorded quality (same
-    #    6-decimal rounding tolerance as the manifest columns).
     if not np.allclose(
         sample.quality,
         np.asarray(record.quality, dtype=np.float32),
@@ -679,19 +717,49 @@ def _check_npz_quality(sample, record: FusionSampleRecord) -> str | None:
     ):
         return "npz quality != manifest quality"
 
+    quality = np.asarray(sample.quality, dtype=np.float64)
+    if np.any(quality < 0.0) or np.any(quality > 1.0):
+        return f"quality entries outside [0, 1]: {sample.quality.tolist()}"
+    valid_ratio, in_bounds_ratio, brightness_valid_ratio, mean_abs_q = quality
+
     valid = sample.valid > 0
-    valid_ratio, _, _, mean_abs_q = sample.quality
-    # 2. No valid pixel anywhere in the crop -> the mask (a subset of the
-    #    crop window) has no valid pixel either, so every quality entry
-    #    must be exactly 0.
-    if not valid.any() and float(np.abs(sample.quality).sum()) > 0.0:
-        return f"zero valid pixels but nonzero quality {sample.quality.tolist()}"
-    # 3. mean_abs_q is a mean over mask-valid pixels, a subset of the
-    #    crop-valid pixels: it can never exceed the crop's max abs_q.
-    if valid.any() and float(mean_abs_q) > float(sample.abs_q[valid].max()) + 1e-6:
+    if not valid.any():
+        if valid_ratio > 0.0:
+            return f"zero valid pixels but valid_ratio {valid_ratio:.6f} != 0"
+        if mean_abs_q > 0.0:
+            return f"zero valid pixels but mean_abs_q {mean_abs_q:.6f} != 0"
+        return None
+
+    # Containment relations on the stored float32 values (exact comparison;
+    # equality is legal). A valid pixel is by definition in bounds and
+    # bright enough, so valid_ratio can never exceed either bound, and a
+    # crop holding valid pixels must record a positive valid_ratio.
+    if valid_ratio <= 0.0:
         return (
-            f"mean_abs_q {float(mean_abs_q):.6f} exceeds max abs_q "
-            f"{float(sample.abs_q[valid].max()):.6f} on valid pixels"
+            f"valid_ratio {valid_ratio:.6f} must be positive when the crop "
+            f"has {int(valid.sum())} valid pixels"
+        )
+    if valid_ratio > in_bounds_ratio:
+        return (
+            f"valid_ratio {valid_ratio:.6f} exceeds in_bounds_ratio "
+            f"{in_bounds_ratio:.6f}"
+        )
+    if valid_ratio > brightness_valid_ratio:
+        return (
+            f"valid_ratio {valid_ratio:.6f} exceeds brightness_valid_ratio "
+            f"{brightness_valid_ratio:.6f}"
+        )
+
+    recomputed = float(sample.abs_q[valid].mean())
+    if not np.isclose(recomputed, mean_abs_q, rtol=0.0, atol=1e-6):
+        return (
+            f"mean_abs_q {mean_abs_q:.6f} != recomputed crop mean "
+            f"{recomputed:.6f} over {int(valid.sum())} valid pixels"
+        )
+    if not np.isclose(recomputed, float(record.quality[3]), rtol=0.0, atol=1.5e-6):
+        return (
+            f"manifest mean_abs_q {float(record.quality[3]):.6f} != recomputed "
+            f"crop mean {recomputed:.6f}"
         )
     return None
 
@@ -714,12 +782,19 @@ def audit_fusion_dataset(
     """
     output_root = Path(output_root)
     audit_root = Path(audit_root)
+    manifest_path = output_root / "dataset_manifest.csv"
+    summary_path = output_root / "dataset_summary.json"
     audit: dict = {
         "output_root": output_root.resolve().as_posix(),
         "npz_fields": list(NPZ_FIELDS),
         "quality_vector_keys": list(QUALITY_VECTOR_KEYS),
         "class_names": class_names,
         "expected_splits": expected_splits,
+        # Bind the verdict to the exact manifest/summary bytes so training
+        # can refuse a dataset whose manifest rows or generation parameters
+        # changed after this audit ran.
+        "manifest_sha256": file_digest(manifest_path) if manifest_path.is_file() else "",
+        "summary_sha256": file_digest(summary_path) if summary_path.is_file() else "",
     }
 
     total = len(records)
@@ -856,6 +931,13 @@ def audit_fusion_dataset(
         and not audit["orphan_npz_files"]
         and not leakage
         and audit["count_match_expected"]
+        # A formal dataset (expected_splits given) must keep the manifest
+        # and generation summary it was audited with; the training gate
+        # refuses reports without their digests.
+        and (
+            expected_splits is None
+            or (bool(audit["manifest_sha256"]) and bool(audit["summary_sha256"]))
+        )
     )
 
     audit_path = audit_root / f"{audit_stem}_audit.json"

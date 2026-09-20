@@ -49,6 +49,7 @@ from models.polar_fusion import (
     FusionClsDataset,
     GrayBackboneAdapter,
     PolarFusionModel,
+    architecture_name,
     build_gray_class_perm,
     class_names_from_manifest,
     fusion_metadata,
@@ -62,6 +63,7 @@ from models.polar_fusion import (
 from scripts.train_models import DeviceUnavailableError, InvalidRunIdError, resolve_device, validate_run_id
 
 DEFAULT_SEED = 2026
+DEFAULT_IMGSZ = 224
 DEFAULT_DATA = "datasets/underwater_cls_fusion_v4_band"
 DEFAULT_PHASE = "freeze"
 PHASES = ("freeze", "joint")
@@ -103,7 +105,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="V3 fusion dataset root (default: %(default)s).",
     )
     parser.add_argument("--device", default="0", help="Training device.")
-    parser.add_argument("--imgsz", type=int, default=224)
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=None,
+        help="Input size. New runs default to 224; resume runs inherit the "
+        "init checkpoint's imgsz unless explicitly passed (a different "
+        "explicit size is refused).",
+    )
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=1e-3, help="Head learning rate.")
@@ -189,7 +198,6 @@ def validate_dataset(data_root: Path, require_audit: bool = True) -> dict:
     if audit_path.is_file():
         audit = json.loads(audit_path.read_text(encoding="utf-8"))
         report["audit_passed"] = bool(audit.get("audit_passed", False))
-        report["audit_fingerprint"] = dataset_fingerprint(data_root)
         if require_audit:
             if not report["audit_passed"]:
                 raise ValueError(
@@ -197,11 +205,19 @@ def validate_dataset(data_root: Path, require_audit: bool = True) -> dict:
                     "re-audit the dataset before training"
                 )
             # The audit verdict alone proves nothing about the current file
-            # contents; re-verify every npz against the audit-time digests.
+            # contents; re-verify manifest/summary/per-file digests first,
+            # then record the fingerprint of the verified state.
             integrity = verify_dataset_integrity(data_root)
             report["integrity_verified_files"] = integrity["verified_files"]
+            report["audit_fingerprint"] = dataset_fingerprint(data_root)
         else:
             report["integrity_verified_files"] = None
+            try:
+                report["audit_fingerprint"] = dataset_fingerprint(data_root)
+            except (FileNotFoundError, ValueError):
+                # Old-format reports cannot be fingerprinted without a
+                # re-audit; dry-run only reports, it does not enforce.
+                report["audit_fingerprint"] = ""
     elif require_audit:
         raise FileNotFoundError(
             f"missing dataset audit report: {audit_path}; run "
@@ -259,10 +275,11 @@ def structure_check(num_classes: int, imgsz: int) -> dict:
 
 def dry_run(args: argparse.Namespace) -> int:
     data_root = PROJECT_ROOT / args.data if not Path(args.data).is_absolute() else Path(args.data)
+    imgsz = int(args.imgsz) if args.imgsz is not None else DEFAULT_IMGSZ
     # Dry-run reports audit status without enforcing it; formal training
     # (run_training) hard-requires a passed audit.
     dataset_report = validate_dataset(data_root, require_audit=False)
-    structure_report = structure_check(len(dataset_report["class_names"]), args.imgsz)
+    structure_report = structure_check(len(dataset_report["class_names"]), imgsz)
     base_path = PROJECT_ROOT / args.base
     base_present = base_path.is_file()
     gray_weights_present = bool(args.gray_weights) and (PROJECT_ROOT / args.gray_weights).is_file()
@@ -278,6 +295,7 @@ def dry_run(args: argparse.Namespace) -> int:
         "dataset_audit_passed": dataset_report.get("audit_passed"),
         "dataset_fingerprint": dataset_report.get("audit_fingerprint", ""),
         "structure": structure_report,
+        "imgsz": imgsz,
         "base_model": args.base,
         "base_checkpoint_present": base_present,
         "base_checkpoint_path": str(base_path),
@@ -465,11 +483,69 @@ def _restore_backbone(
         base_model=str(init_payload.get("base_model", DEFAULT_BASE_MODEL)),
         quality_vector_keys=(),
         imgsz=0,
+        architecture=str(init_payload.get("architecture", "")),
         gray_weights=str(init_payload.get("gray_weights", "")),
         head_replaced=bool(init_payload.get("head_replaced", False)),
     )
     # Weights are then overwritten by the checkpoint state dict.
     return rebuild_gray_backbone(metadata, device)
+
+
+def _enforce_architecture_gate(
+    backbone: GrayBackboneAdapter,
+    recorded_architecture: str,
+    legacy_allowed: bool,
+    context: str,
+) -> str:
+    """Unified YOLO26/legacy admission for fresh and resumed training.
+
+    The architecture is identified from the actually loaded/restored gray
+    backbone (its yaml), never from a requested name. An unidentifiable
+    backbone, or a recorded architecture that contradicts the actual one,
+    is refused instead of guessed. Non-YOLO26 branches require the explicit
+    ``--legacy-gray-weights`` comparison flag. Must run before the training
+    output directory is created and before any optimizer update.
+    """
+    actual = architecture_name(backbone.module)
+    if not actual:
+        raise ValueError(
+            f"cannot identify the gray backbone architecture ({context}); "
+            "refusing to train without a verified architecture (no guessing)"
+        )
+    if recorded_architecture and recorded_architecture != actual:
+        raise ValueError(
+            f"recorded architecture {recorded_architecture!r} does not match "
+            f"the actual gray backbone {actual!r} ({context}); refusing"
+        )
+    if not actual.startswith("yolo26") and not legacy_allowed:
+        raise ValueError(
+            f"gray backbone architecture {actual!r} is not YOLO26; formal "
+            "training requires a trained YOLO26 gray Model B. Pass "
+            "--legacy-gray-weights to use legacy weights for explicit "
+            "comparison runs only."
+        )
+    return actual
+
+
+def _resolve_imgsz(requested: int | None, checkpoint_imgsz: int | None) -> int:
+    """One resolved input size for loaders, forward checks and metadata.
+
+    New runs default to 224. Resume runs inherit the init checkpoint's
+    imgsz; an explicit different size is refused (stating both sizes)
+    because changing the preprocessing size would silently invalidate the
+    checkpoint's contract.
+    """
+    if checkpoint_imgsz is None:
+        return int(requested) if requested is not None else DEFAULT_IMGSZ
+    if requested is None:
+        return int(checkpoint_imgsz)
+    if int(requested) != int(checkpoint_imgsz):
+        raise ValueError(
+            f"--imgsz {int(requested)} does not match the init checkpoint's "
+            f"training imgsz {int(checkpoint_imgsz)}; resume runs must keep "
+            "the checkpoint input size (omit --imgsz to inherit it)"
+        )
+    return int(requested)
 
 
 def _set_seed(seed: int) -> None:
@@ -516,23 +592,21 @@ def run_training(args: argparse.Namespace) -> Path:
         backbone, gray_info = prepare_gray_backbone(
             base_path, gray_weights, class_names, device
         )
-        if (
-            gray_info["gray_weights"]
-            and not gray_info["architecture"].startswith("yolo26")
-            and not args.legacy_gray_weights
-        ):
-            raise ValueError(
-                f"gray weights architecture {gray_info['architecture']!r} is "
-                "not YOLO26; formal training requires a trained YOLO26 gray "
-                "Model B (--gray-weights). Pass --legacy-gray-weights to use "
-                "legacy weights for explicit comparison runs only."
-            )
-        _verify_backbone_output(backbone, args.imgsz, num_classes, device)
+        # Unified admission: the architecture is read from the actually
+        # loaded gray backbone, never from the requested --base/--gray-weights.
+        context = (
+            f"gray weights {gray_info['gray_weights']}"
+            if gray_info["gray_weights"]
+            else f"base checkpoint {gray_info['base_model']}"
+        )
+        _enforce_architecture_gate(backbone, "", args.legacy_gray_weights, context)
+        imgsz = _resolve_imgsz(args.imgsz, None)
+        _verify_backbone_output(backbone, imgsz, num_classes, device)
         model = PolarFusionModel(backbone, num_classes=num_classes).to(device)
         metadata: FusionCheckpointMetadata = fusion_metadata(
             class_names,
             base_model=gray_info["base_model"],
-            imgsz=args.imgsz,
+            imgsz=imgsz,
             architecture=gray_info["architecture"],
             gray_weights=gray_info["gray_weights"],
             gray_class_names=gray_info["gray_class_names"],
@@ -549,6 +623,19 @@ def run_training(args: argparse.Namespace) -> Path:
                 f"init checkpoint classes {metadata.class_names} != dataset "
                 f"classes {tuple(class_names)}"
             )
+        # Same admission as a fresh build: identify from the rebuilt
+        # backbone; an old checkpoint without a recorded architecture is
+        # identified from the actual weights, a contradictory record is
+        # refused. Runs before the output dir exists and before any
+        # optimizer update.
+        _enforce_architecture_gate(
+            backbone,
+            metadata.architecture,
+            args.legacy_gray_weights,
+            context=f"init checkpoint {init_checkpoint}",
+        )
+        imgsz = _resolve_imgsz(args.imgsz, metadata.imgsz)
+        _verify_backbone_output(backbone, imgsz, num_classes, device)
 
     # Phase freeze: gray weights are fixed; joint: everything trains, with
     # the backbone at the lower --gray-lr rate.
@@ -580,14 +667,14 @@ def run_training(args: argparse.Namespace) -> Path:
     train_paths, _, _ = read_manifest_split(data_root, "train")
     val_paths, _, _ = read_manifest_split(data_root, "val")
     train_loader = torch.utils.data.DataLoader(
-        FusionClsDataset(train_paths, imgsz=args.imgsz),
+        FusionClsDataset(train_paths, imgsz=imgsz),
         batch_size=args.batch,
         shuffle=True,
         num_workers=0 if sys.platform == "win32" else 8,
         generator=torch.Generator().manual_seed(args.seed),
     )
     val_loader = torch.utils.data.DataLoader(
-        FusionClsDataset(val_paths, imgsz=args.imgsz),
+        FusionClsDataset(val_paths, imgsz=imgsz),
         batch_size=args.batch,
         shuffle=False,
         num_workers=0 if sys.platform == "win32" else 8,
@@ -672,7 +759,7 @@ def run_training(args: argparse.Namespace) -> Path:
                 "init_from": str(init_checkpoint) if init_checkpoint else "",
                 "data": str(data_root),
                 "dataset_fingerprint": dataset_report.get("audit_fingerprint", ""),
-                "imgsz": args.imgsz,
+                "imgsz": imgsz,
                 "batch": args.batch,
                 "epochs": args.epochs,
                 "lr": args.lr,

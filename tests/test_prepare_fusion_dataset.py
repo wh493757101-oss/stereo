@@ -597,12 +597,13 @@ class TestAudit:
             signed_q=abs_q.copy(),
             abs_q=abs_q,
             valid=np.ones((4, 8), np.uint8),
-            quality=build_quality_vector(1, 1, 1, 1),
+            # 4 of 32 valid pixels are saturated -> crop mean 0.125.
+            quality=build_quality_vector(1, 1, 1, 0.125),
             class_id=0,
         )
         records = self.make_records(
             [("train", "g", 0, "bad.npz")],
-            quality=(1.0, 1.0, 1.0, 1.0),
+            quality=(1.0, 1.0, 1.0, 0.125),
             polar_valid_ratio=1.0,
         )
         audit = audit_fusion_dataset(
@@ -627,12 +628,13 @@ class TestAudit:
             signed_q=abs_q.copy(),
             abs_q=abs_q,
             valid=np.ones((4, 8), np.uint8),
-            quality=build_quality_vector(1, 1, 1, 1),
+            # 1 of 32 valid pixels is saturated -> crop mean 0.03125.
+            quality=build_quality_vector(1, 1, 1, 0.03125),
             class_id=0,
         )
         records = self.make_records(
             [("train", "g", 0, "train/class_0/s0.npz")],
-            quality=(1.0, 1.0, 1.0, 1.0),
+            quality=(1.0, 1.0, 1.0, 0.03125),
             polar_valid_ratio=1.0,
         )
         audit = audit_fusion_dataset(
@@ -704,23 +706,24 @@ class TestAudit:
         )
         assert audit["audit_passed"] is False
 
-    def test_audit_flags_mean_abs_q_above_crop_max(self, tmp_path):
-        """mean_abs_q is a mean over mask-valid pixels (a subset of the
-        crop-valid pixels), so it can never exceed the crop's max abs_q."""
+    def test_audit_flags_mean_abs_q_mismatch(self, tmp_path):
+        """All valid abs_q = 0.5 but both the npz and the manifest claim
+        mean 0.1: the substantive recomputation must fail (the old
+        mean<=max bound could not catch this)."""
         gray = np.full((4, 4), 100, np.uint8)
-        signed = np.full((4, 4), 0.2, np.float32)
+        signed = np.full((4, 4), 0.5, np.float32)
         save_fusion_sample(
             tmp_path / "train" / "class_0" / "s0.npz",
             gray=gray,
             signed_q=signed,
             abs_q=np.abs(signed),
             valid=np.ones((4, 4), np.uint8),
-            quality=build_quality_vector(1.0, 1.0, 1.0, 0.9),  # > max 0.2
+            quality=build_quality_vector(1.0, 1.0, 1.0, 0.1),
             class_id=0,
         )
         records = self.make_records(
             [("train", "g", 0, "train/class_0/s0.npz")],
-            quality=(1.0, 1.0, 1.0, 0.9),
+            quality=(1.0, 1.0, 1.0, 0.1),
             polar_valid_ratio=1.0,
         )
         audit = audit_fusion_dataset(
@@ -730,7 +733,7 @@ class TestAudit:
             audit_root=tmp_path / "audit",
             expected_splits=None,
         )
-        assert any("max abs_q" in f for f in audit["npz_quality_failures"])
+        assert any("recomputed crop mean" in f for f in audit["npz_quality_failures"])
         assert audit["audit_passed"] is False
 
     def test_audit_writes_report_into_dataset_root(self, tmp_path, synthetic_source):
@@ -887,3 +890,328 @@ class TestAudit:
             )
             for a, b in zip(original.quality, again.quality):
                 assert a == pytest.approx(b, abs=1e-6)
+
+
+class TestAuditBinding:
+    """The audit report must record the manifest/summary digests so the
+    training gate can bind the verdict to the current data (issue 1)."""
+
+    def test_audit_records_manifest_and_summary_digests(
+        self, tmp_path, synthetic_source
+    ):
+        import hashlib
+
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=records,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits={"train": 1, "val": 1, "test": 0},
+        )
+        assert audit["audit_passed"] is True
+        assert audit["manifest_sha256"] == hashlib.sha256(
+            (output / "dataset_manifest.csv").read_bytes()
+        ).hexdigest()
+        assert audit["summary_sha256"] == hashlib.sha256(
+            (output / "dataset_summary.json").read_bytes()
+        ).hexdigest()
+
+    def test_formal_audit_fails_without_summary(self, tmp_path, synthetic_source):
+        """A formal dataset (expected counts given) must keep its generation
+        summary; the audit verdict fails when it is missing."""
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        (output / "dataset_summary.json").unlink()
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=records,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits={"train": 1, "val": 1, "test": 0},
+        )
+        assert audit["summary_sha256"] == ""
+        assert audit["audit_passed"] is False
+
+
+class TestQualitySemantics:
+    """Zero-valid-pixel quality semantics and substantive mean_abs_q
+    recomputation (review issues 3/4)."""
+
+    def _dark_pair_sample(self):
+        """Real compute_polar_features + quality_vector_from_result on an
+        all-black pair: positive disparity, the object maps in bounds, no
+        pixel is bright enough to measure."""
+        left = np.zeros((4, 8), dtype=np.uint8)
+        right = np.zeros((4, 8), dtype=np.uint8)
+        disparity = np.full((4, 8), 2.0, dtype=np.float32)
+        mask = np.zeros((4, 8), dtype=np.uint8)
+        mask[1:3, 3:6] = 1
+        result = compute_polar_features(left, right, disparity, object_mask=mask)
+        vector, components = quality_vector_from_result(result, mask)
+        return result, vector, components
+
+    def test_dark_pair_quality_is_zero_one_zero_zero(self):
+        _, vector, components = self._dark_pair_sample()
+        assert components["valid_ratio"] == 0.0
+        assert components["in_bounds_ratio"] == 1.0
+        assert components["brightness_valid_ratio"] == 0.0
+        assert components["mean_abs_q"] == 0.0
+        np.testing.assert_allclose(vector, [0.0, 1.0, 0.0, 0.0])
+
+    def test_zero_valid_quality_accepts_in_bounds_dark_pair(self, tmp_path):
+        """[0, 1, 0, 0] is legitimate for a dark pair and must pass; the
+        in_bounds/brightness ratios are not forced to zero."""
+        result, vector, _ = self._dark_pair_sample()
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=np.zeros((4, 8), np.uint8),
+            signed_q=result.signed_q,
+            abs_q=result.abs_q,
+            valid=result.valid_mask.astype(np.uint8),
+            quality=vector,
+            class_id=0,
+        )
+        records = TestAudit.make_records(
+            None,
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(0.0, 1.0, 0.0, 0.0),
+            polar_valid_ratio=0.0,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["npz_quality_failures"] == []
+        assert audit["audit_passed"] is True
+
+    def test_zero_valid_quality_rejects_nonzero_valid_ratio(self, tmp_path):
+        result, _, _ = self._dark_pair_sample()
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=np.zeros((4, 8), np.uint8),
+            signed_q=result.signed_q,
+            abs_q=result.abs_q,
+            valid=result.valid_mask.astype(np.uint8),
+            quality=build_quality_vector(0.5, 1.0, 0.0, 0.0),
+            class_id=0,
+        )
+        records = TestAudit.make_records(
+            None,
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(0.5, 1.0, 0.0, 0.0),
+            polar_valid_ratio=0.5,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert any("zero valid pixels" in f for f in audit["npz_quality_failures"])
+        assert audit["audit_passed"] is False
+
+    def test_zero_valid_quality_rejects_nonzero_mean_abs_q(self, tmp_path):
+        result, _, _ = self._dark_pair_sample()
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=np.zeros((4, 8), np.uint8),
+            signed_q=result.signed_q,
+            abs_q=result.abs_q,
+            valid=result.valid_mask.astype(np.uint8),
+            quality=build_quality_vector(0.0, 1.0, 0.0, 0.3),
+            class_id=0,
+        )
+        records = TestAudit.make_records(
+            None,
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(0.0, 1.0, 0.0, 0.3),
+            polar_valid_ratio=0.0,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert any("zero valid pixels" in f for f in audit["npz_quality_failures"])
+        assert audit["audit_passed"] is False
+
+    def test_negative_signed_q_with_matching_mean_passes(self, tmp_path):
+        """Legal negative signed_q values: abs_q = |signed_q| and the
+        recorded mean must match the crop recomputation."""
+        signed = np.full((4, 4), -0.4, np.float32)
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=np.full((4, 4), 100, np.uint8),
+            signed_q=signed,
+            abs_q=np.abs(signed),
+            valid=np.ones((4, 4), np.uint8),
+            quality=build_quality_vector(1.0, 1.0, 1.0, 0.4),
+            class_id=0,
+        )
+        records = TestAudit.make_records(
+            None,
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(1.0, 1.0, 1.0, 0.4),
+            polar_valid_ratio=1.0,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["npz_quality_failures"] == []
+        assert audit["audit_passed"] is True
+
+    def test_mean_abs_q_rounding_boundary_passes(self, tmp_path):
+        """float32 mean vs the manifest's 6-decimal text: a value at the
+        rounding boundary must still pass (rtol=0, atol=1.5e-6)."""
+        value = np.float32(1.0 / 3.0)  # 0.33333334...
+        abs_q = np.full((4, 4), value, np.float32)
+        mean = float(abs_q.mean())
+        quality = build_quality_vector(1.0, 1.0, 1.0, mean)
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=np.full((4, 4), 100, np.uint8),
+            signed_q=abs_q.copy(),
+            abs_q=abs_q,
+            valid=np.ones((4, 4), np.uint8),
+            quality=quality,
+            class_id=0,
+        )
+        # The manifest stores 6-decimal text.
+        records = TestAudit.make_records(
+            None,
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=(1.0, 1.0, 1.0, round(mean, 6)),
+            polar_valid_ratio=1.0,
+        )
+        audit = audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+        assert audit["npz_quality_failures"] == []
+        assert audit["audit_passed"] is True
+
+    def test_generated_dataset_passes_mean_recomputation(
+        self, tmp_path, synthetic_source
+    ):
+        """End-to-end: samples built by the real generator (mask-restricted
+        valid, crop window covering the full mask) pass the recomputation."""
+        output = tmp_path / "fusion_v3"
+        records = build_fusion_dataset(
+            source_root=synthetic_source, output_root=output, matcher=small_matcher()
+        )
+        audit = audit_fusion_dataset(
+            output_root=output,
+            records=records,
+            class_names=["metal_submarine", "plastic_fish"],
+            audit_root=tmp_path / "audit",
+            expected_splits={"train": 1, "val": 1, "test": 0},
+        )
+        assert audit["npz_quality_failures"] == []
+        assert audit["audit_passed"] is True
+
+    @staticmethod
+    def _uniform_valid_quality_audit(tmp_path, quality, mean=0.5):
+        """Audit one sample whose valid pixels all carry abs_q == mean, so
+        the mean_abs_q recomputation matches and only the ratio invariants
+        can fail."""
+        signed = np.full((4, 4), mean, np.float32)
+        save_fusion_sample(
+            tmp_path / "train" / "class_0" / "s0.npz",
+            gray=np.full((4, 4), 100, np.uint8),
+            signed_q=signed,
+            abs_q=np.abs(signed),
+            valid=np.ones((4, 4), np.uint8),
+            quality=build_quality_vector(*quality),
+            class_id=0,
+        )
+        records = TestAudit.make_records(
+            None,
+            [("train", "g", 0, "train/class_0/s0.npz")],
+            quality=tuple(float(v) for v in quality),
+            polar_valid_ratio=float(quality[0]),
+        )
+        return audit_fusion_dataset(
+            output_root=tmp_path,
+            records=records,
+            class_names=["class_0"],
+            audit_root=tmp_path / "audit",
+            expected_splits=None,
+        )
+
+    def test_nonempty_valid_requires_positive_valid_ratio(self, tmp_path):
+        """[0, 1, 1, 0.5] with a non-empty valid mask and a matching mean:
+        valid_ratio must be positive whenever the crop has valid pixels."""
+        audit = self._uniform_valid_quality_audit(tmp_path, (0.0, 1.0, 1.0, 0.5))
+        assert audit["npz_quality_failures"]
+        assert any("must be positive" in f for f in audit["npz_quality_failures"])
+        assert audit["audit_passed"] is False
+
+    def test_valid_ratio_exceeding_in_bounds_rejected(self, tmp_path):
+        """[0.8, 0.2, 0.3, 0.5] with a matching mean: valid pixels are a
+        subset of the in-bounds pixels, so valid_ratio can never exceed
+        in_bounds_ratio."""
+        audit = self._uniform_valid_quality_audit(tmp_path, (0.8, 0.2, 0.3, 0.5))
+        assert any("in_bounds_ratio" in f for f in audit["npz_quality_failures"])
+        assert audit["audit_passed"] is False
+
+    def test_valid_ratio_exceeding_brightness_rejected(self, tmp_path):
+        """[0.5, 0.6, 0.3, 0.5]: in-bounds containment holds, only the
+        brightness containment is violated, so this must be caught by the
+        dedicated brightness branch."""
+        audit = self._uniform_valid_quality_audit(tmp_path, (0.5, 0.6, 0.3, 0.5))
+        assert any(
+            "brightness_valid_ratio" in f for f in audit["npz_quality_failures"]
+        )
+        assert audit["audit_passed"] is False
+
+    def test_legal_positive_quality_passes(self, tmp_path):
+        audit = self._uniform_valid_quality_audit(tmp_path, (0.5, 0.6, 0.7, 0.5))
+        assert audit["npz_quality_failures"] == []
+        assert audit["audit_passed"] is True
+
+    def test_valid_ratio_equal_to_upper_bounds_passes(self, tmp_path):
+        """Equality with either containment bound is legal."""
+        audit = self._uniform_valid_quality_audit(tmp_path, (0.5, 0.5, 0.5, 0.5))
+        assert audit["npz_quality_failures"] == []
+        assert audit["audit_passed"] is True
+
+
+class TestCropCutRefusal:
+    """A crop window that cuts valid pixels cannot be verified by the
+    mean_abs_q audit; generation must refuse it explicitly (issue 4)."""
+
+    def test_crop_window_cutting_valid_pixels_refused(
+        self, tmp_path, synthetic_source, monkeypatch
+    ):
+        from scripts.make_polar_dataset import CropWindow
+        import scripts.prepare_cls_fusion_dataset as pcf
+
+        def tiny_window(polygon, width, height, padding):
+            return CropWindow(x1=0, y1=0, x2=2, y2=2)
+
+        monkeypatch.setattr(pcf, "make_crop_window", tiny_window)
+        with pytest.raises(ValueError, match="cuts valid polar pixels"):
+            build_fusion_dataset(
+                source_root=synthetic_source,
+                output_root=tmp_path / "fusion_v3",
+                matcher=small_matcher(),
+            )

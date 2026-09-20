@@ -1,6 +1,7 @@
 """Tests for scripts.train_polar_fusion (CLI gate, dry-run, phases) and
 scripts.eval_polar_fusion argument handling. No training is executed."""
 
+import json
 import shutil
 import sys
 import tempfile
@@ -75,6 +76,7 @@ def write_sample(root: Path, split: str, class_name: str, name: str, class_id: i
 def mini_dataset(tmp_path):
     import csv
     import io
+    import json
 
     root = tmp_path / "fusion_v3"
     rows = []
@@ -90,6 +92,12 @@ def mini_dataset(tmp_path):
     writer.writeheader()
     writer.writerows(rows)
     (root / "dataset_manifest.csv").write_text(buffer.getvalue(), encoding="utf-8")
+    # Formal datasets carry the generation summary; the training gate
+    # requires it and binds it to the audit.
+    (root / "dataset_summary.json").write_text(
+        json.dumps({"generation": {"matching": "full", "crop_pad": 10}}),
+        encoding="utf-8",
+    )
     return root
 
 
@@ -146,18 +154,29 @@ class FakeUltralyticsModel(torch.nn.Module):
         return (logits.softmax(-1), logits)
 
 
+GRAY_WEIGHTS_NAMES = {
+    0: "metal_submarine",
+    1: "plastic_fish",
+    2: "plastic_submarine",
+    3: "real_fish",
+}
+
+
 class FakeYOLO:
     last_weights: str | None = None
     last_model_head = None
 
     def __init__(self, weights):
         FakeYOLO.last_weights = weights
-        if "gray" in str(weights):
+        text = str(weights)
+        if "noyaml" in text:
+            # Simulates a checkpoint whose architecture provenance cannot be
+            # identified (no yaml_file recorded).
+            self.model = FakeUltralyticsModel(4, dict(GRAY_WEIGHTS_NAMES), "")
+        elif "gray" in text:
             # Accepted 4-class gray weights: plastic_fish=1, plastic_submarine=2
             self.model = FakeUltralyticsModel(
-                4,
-                {0: "metal_submarine", 1: "plastic_fish", 2: "plastic_submarine", 3: "real_fish"},
-                "yolov8n-cls.yaml",
+                4, dict(GRAY_WEIGHTS_NAMES), "yolov8n-cls.yaml"
             )
         else:
             # Stock ImageNet base: 1000 classes, generic names
@@ -427,6 +446,9 @@ class TestCLI:
         assert args.data == "datasets/underwater_cls_fusion_v4_band"
         assert args.gray_weights is None
         assert args.dry_run is False
+        # New runs default to 224 at resolution time; resume inherits the
+        # init checkpoint's imgsz (review issue 5).
+        assert args.imgsz is None
 
     def test_invalid_run_id_rejected_before_any_work(self, monkeypatch):
         def boom(_):
@@ -526,18 +548,34 @@ class TestDryRun:
 
 class TestAuditGate:
     @staticmethod
-    def write_audit_file(root: Path, passed: bool = True) -> None:
-        """Write a dataset_audit.json with real per-file digests, mirroring
-        what scripts.prepare_cls_fusion_dataset produces."""
+    def write_audit_file(
+        root: Path,
+        passed: bool = True,
+        omit_digest: str | None = None,
+    ) -> None:
+        """Write a dataset_audit.json with real manifest/summary/npz digests,
+        mirroring what scripts.prepare_cls_fusion_dataset produces."""
         import hashlib
         import json
 
+        def sha(path: Path) -> str:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
         digests = {
-            p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            p.relative_to(root).as_posix(): sha(p)
             for p in sorted(root.rglob("*.npz"))
         }
+        if omit_digest:
+            digests.pop(omit_digest)
         (root / "dataset_audit.json").write_text(
-            json.dumps({"audit_passed": passed, "file_digests": digests}),
+            json.dumps(
+                {
+                    "audit_passed": passed,
+                    "file_digests": digests,
+                    "manifest_sha256": sha(root / "dataset_manifest.csv"),
+                    "summary_sha256": sha(root / "dataset_summary.json"),
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -564,13 +602,36 @@ class TestAuditGate:
         report = tpf.validate_dataset(mini_dataset)
         assert report["audit_passed"] is True
         assert report["integrity_verified_files"] == 8
+        # The fingerprint is derived from the audit-recorded digests
+        # (manifest + summary + every npz), not from a fresh hash of the
+        # files, so it identifies the audited state that was verified.
+        audit = json.loads(
+            (mini_dataset / "dataset_audit.json").read_text(encoding="utf-8")
+        )
         digest = hashlib.sha256()
-        for name in ("dataset_manifest.csv", "dataset_audit.json"):
-            digest.update(name.encode("utf-8"))
+        digest.update(b"manifest\0")
+        digest.update(audit["manifest_sha256"].encode("ascii"))
+        digest.update(b"\0summary\0")
+        digest.update(audit["summary_sha256"].encode("ascii"))
+        for relative in sorted(audit["file_digests"]):
+            digest.update(b"\0npz\0")
+            digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
-            digest.update((mini_dataset / name).read_bytes())
-            digest.update(b"\0")
+            digest.update(audit["file_digests"][relative].encode("ascii"))
         assert report["audit_fingerprint"] == digest.hexdigest()
+
+    def test_fingerprint_changes_with_audited_digests(self, mini_dataset):
+        import json
+
+        from core.fusion_dataset import dataset_fingerprint
+
+        self.write_audit_file(mini_dataset)
+        first = dataset_fingerprint(mini_dataset)
+        audit_path = mini_dataset / "dataset_audit.json"
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        audit["summary_sha256"] = "f" * 64
+        audit_path.write_text(json.dumps(audit), encoding="utf-8")
+        assert dataset_fingerprint(mini_dataset) != first
 
     def test_tampered_npz_refused_for_training(self, mini_dataset):
         self.write_audit_file(mini_dataset)
@@ -595,6 +656,98 @@ class TestAuditGate:
             '{"audit_passed": true}', encoding="utf-8"
         )
         with pytest.raises(ValueError, match="digests"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_old_report_without_binding_digests_refused(self, mini_dataset):
+        """A report written before manifest/summary digests existed must be
+        refused with a re-audit prompt, never silently accepted."""
+        import hashlib
+        import json
+
+        digests = {
+            p.relative_to(mini_dataset).as_posix(): hashlib.sha256(
+                p.read_bytes()
+            ).hexdigest()
+            for p in sorted(mini_dataset.rglob("*.npz"))
+        }
+        (mini_dataset / "dataset_audit.json").write_text(
+            json.dumps({"audit_passed": True, "file_digests": digests}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="re-run the dataset audit"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_split_or_group_edit_after_audit_refused(self, mini_dataset):
+        self.write_audit_file(mini_dataset)
+        manifest = mini_dataset / "dataset_manifest.csv"
+        text = manifest.read_text(encoding="utf-8")
+        # Move one sample from train to val: same file set, same digests,
+        # only the manifest bytes change.
+        tampered = text.replace("m0,train,", "m0,val,", 1)
+        assert tampered != text
+        manifest.write_text(tampered, encoding="utf-8")
+        with pytest.raises(ValueError, match="manifest"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_generation_params_edit_after_audit_refused(self, mini_dataset):
+        import json
+
+        self.write_audit_file(mini_dataset)
+        summary = mini_dataset / "dataset_summary.json"
+        summary.write_text(
+            json.dumps({"generation": {"matching": "bands", "crop_pad": 10}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="summary"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_missing_summary_refused(self, mini_dataset):
+        self.write_audit_file(mini_dataset)
+        (mini_dataset / "dataset_summary.json").unlink()
+        with pytest.raises(ValueError, match="summary"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_extra_npz_on_disk_refused(self, mini_dataset):
+        import shutil as shutil_mod
+
+        self.write_audit_file(mini_dataset)
+        shutil_mod.copyfile(
+            mini_dataset / "train" / "metal" / "m0.npz",
+            mini_dataset / "train" / "metal" / "extra.npz",
+        )
+        with pytest.raises(ValueError, match="disk"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_unreferenced_by_audit_refused(self, mini_dataset):
+        """A manifest reference the audit never digested is refused even
+        when the manifest bytes themselves match the audit."""
+        import json
+
+        self.write_audit_file(mini_dataset)
+        audit_path = mini_dataset / "dataset_audit.json"
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        del audit["file_digests"]["train/metal/m0.npz"]
+        audit_path.write_text(json.dumps(audit), encoding="utf-8")
+        with pytest.raises(ValueError, match="unreferenced_by_audit"):
+            tpf.validate_dataset(mini_dataset)
+
+    def test_duplicate_manifest_rows_refused(self, mini_dataset):
+        import csv
+        import io
+
+        manifest = mini_dataset / "dataset_manifest.csv"
+        with manifest.open(encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            fieldnames = list(reader.fieldnames)
+            rows = list(reader)
+        rows.insert(1, dict(rows[0]))  # duplicate the first data row
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        manifest.write_text(buffer.getvalue(), encoding="utf-8")
+        self.write_audit_file(mini_dataset)
+        with pytest.raises(ValueError, match="duplicate"):
             tpf.validate_dataset(mini_dataset)
 
 
@@ -882,9 +1035,13 @@ class TestLegacyArchitectureGate:
     @staticmethod
     def _fake_prepare(architecture):
         def fake_prepare(base, gray_weights, names, device):
-            return tpf.GrayBackboneAdapter(
-                tpf._StructureStubBackbone(len(names))
-            ), {
+            module = tpf._StructureStubBackbone(len(names))
+            # The unified admission reads the architecture from the actual
+            # module, so the stub must carry the yaml a real checkpoint has.
+            module.yaml = (
+                {"yaml_file": f"{architecture}.yaml"} if architecture else {}
+            )
+            return tpf.GrayBackboneAdapter(module), {
                 "base_model": "base.pt",
                 "architecture": architecture,
                 "gray_weights": str(gray_weights),
@@ -938,6 +1095,324 @@ class TestLegacyArchitectureGate:
                 shutil.rmtree(
                     tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True
                 )
+
+
+V3_CLASS_NAMES = [
+    "metal_submarine",
+    "plastic_submarine",
+    "plastic_fish",
+    "real_fish",
+]
+
+
+@pytest.fixture
+def mini_dataset_v3(tmp_path):
+    """4-class mini dataset whose names/ids follow the V3 order, so the
+    fake 4-class gray backbone checkpoints can be restored against it."""
+    import csv
+    import io
+
+    root = tmp_path / "fusion_v3names"
+    rows = []
+    for class_id, name in enumerate(V3_CLASS_NAMES):
+        rows.append(
+            write_sample(root, "train", name, f"tr{class_id}", class_id, seed=class_id)
+        )
+    for class_id, name in enumerate(V3_CLASS_NAMES[:2]):
+        rows.append(
+            write_sample(root, "val", name, f"va{class_id}", class_id, seed=40 + class_id)
+        )
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    (root / "dataset_manifest.csv").write_text(buffer.getvalue(), encoding="utf-8")
+    return root
+
+
+def save_resume_checkpoint(
+    tmp_path: Path,
+    *,
+    architecture: str,
+    imgsz: int = 224,
+    legacy_gray_weights: bool = True,
+    noyaml: bool = False,
+):
+    """Build and save a fusion checkpoint restorable by the fake loader.
+
+    ``legacy_gray_weights=True`` records yolov8n-cls weights (actual
+    architecture yolov8n-cls); otherwise a fresh head from a yolo26n-cls
+    base. ``noyaml`` records weights whose architecture cannot be
+    identified. ``architecture`` is the recorded metadata value.
+    """
+    if legacy_gray_weights:
+        weights = tmp_path / (
+            "model_b-gray_noyaml.pt" if noyaml else "model_b-gray.pt"
+        )
+        weights.write_bytes(b"fake")
+        backbone, info = tpf.prepare_gray_backbone(
+            tmp_path / "base.pt", str(weights), V3_CLASS_NAMES, "cpu"
+        )
+    else:
+        base = tmp_path / "yolo26n-cls.pt"
+        base.write_bytes(b"fake")
+        backbone, info = tpf.prepare_gray_backbone(base, "", V3_CLASS_NAMES, "cpu")
+    model = PolarFusionModel(backbone, num_classes=4)
+    meta = fusion_metadata(
+        V3_CLASS_NAMES,
+        base_model=info["base_model"],
+        imgsz=imgsz,
+        architecture=architecture,
+        gray_weights=info["gray_weights"],
+        gray_class_names=info["gray_class_names"],
+        head_replaced=info["head_replaced"],
+        class_permutation=tuple(info["perm"]) if info["perm"] else (),
+    )
+    return save_fusion_checkpoint(tmp_path / "resume.pt", model, meta)
+
+
+class TestResumeArchitectureGate:
+    """Resume (explicit --init-from and same-run-id auto) must run the same
+    YOLO26/legacy admission as a fresh build, identified from the actually
+    rebuilt gray backbone; the check runs before the output directory is
+    created (review issue 2)."""
+
+    @staticmethod
+    def _prepare(monkeypatch):
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: {})
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+
+    @staticmethod
+    def _argv(run_id, data, checkpoint, extra=()):
+        return [
+            "--run-id", run_id,
+            "--data", str(data),
+            "--init-from", str(checkpoint),
+            "--epochs", "1",
+            "--batch", "4",
+            *extra,
+        ]
+
+    def test_explicit_resume_legacy_refused_without_flag(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        self._prepare(monkeypatch)
+        checkpoint = save_resume_checkpoint(tmp_path, architecture="yolov8n-cls")
+        run_id = "test_resume_legacy_noflag"
+        with pytest.raises(ValueError, match="legacy-gray-weights"):
+            tpf.run_training(
+                tpf.parse_args(self._argv(run_id, mini_dataset_v3, checkpoint))
+            )
+        assert not (tpf.PROJECT_ROOT / "runs" / "train" / run_id).exists()
+
+    def test_explicit_resume_legacy_allowed_with_flag(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        self._prepare(monkeypatch)
+        checkpoint = save_resume_checkpoint(tmp_path, architecture="yolov8n-cls")
+        run_id = "test_resume_legacy_ok"
+        try:
+            run_dir = tpf.run_training(
+                tpf.parse_args(
+                    self._argv(
+                        run_id, mini_dataset_v3, checkpoint, ("--legacy-gray-weights",)
+                    )
+                )
+            )
+            assert (run_dir / "train_config.json").is_file()
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
+
+    def test_old_format_architecture_identified_from_backbone(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        """Old checkpoints recorded no architecture: the actual backbone
+        decides. Legacy weights still require the explicit flag."""
+        self._prepare(monkeypatch)
+        checkpoint = save_resume_checkpoint(tmp_path, architecture="")
+        run_id = "test_resume_oldfmt_noflag"
+        with pytest.raises(ValueError, match="legacy-gray-weights"):
+            tpf.run_training(
+                tpf.parse_args(self._argv(run_id, mini_dataset_v3, checkpoint))
+            )
+
+    def test_old_format_yolo26_resume_passes(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        self._prepare(monkeypatch)
+        checkpoint = save_resume_checkpoint(
+            tmp_path, architecture="", legacy_gray_weights=False
+        )
+        run_id = "test_resume_oldfmt_yolo26"
+        try:
+            run_dir = tpf.run_training(
+                tpf.parse_args(self._argv(run_id, mini_dataset_v3, checkpoint))
+            )
+            assert (run_dir / "train_config.json").is_file()
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
+
+    def test_recorded_architecture_mismatch_refused(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        """Recorded yolo26 but the actual weights are legacy: refuse
+        outright, even with --legacy-gray-weights."""
+        self._prepare(monkeypatch)
+        checkpoint = save_resume_checkpoint(tmp_path, architecture="yolo26n-cls")
+        with pytest.raises(ValueError, match="does not match"):
+            tpf.run_training(
+                tpf.parse_args(
+                    self._argv(
+                        "test_resume_mismatch",
+                        mini_dataset_v3,
+                        checkpoint,
+                        ("--legacy-gray-weights",),
+                    )
+                )
+            )
+
+    def test_unidentifiable_architecture_refused(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        self._prepare(monkeypatch)
+        checkpoint = save_resume_checkpoint(
+            tmp_path, architecture="", noyaml=True
+        )
+        with pytest.raises(ValueError, match="cannot identify"):
+            tpf.run_training(
+                tpf.parse_args(
+                    self._argv("test_resume_noyaml", mini_dataset_v3, checkpoint)
+                )
+            )
+
+    def test_auto_resume_joint_applies_same_gate(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        """Same-run-id auto resume (joint picking up freeze/best.pt) runs the
+        same admission before creating the joint output directory."""
+        self._prepare(monkeypatch)
+        run_id = "test_auto_resume_legacy"
+        freeze_dir = (
+            tpf.PROJECT_ROOT / "runs" / "train" / run_id / "polar_fusion" / "freeze"
+        )
+        try:
+            freeze_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint = save_resume_checkpoint(tmp_path, architecture="yolov8n-cls")
+            shutil.copyfile(checkpoint, freeze_dir / "best.pt")
+            with pytest.raises(ValueError, match="legacy-gray-weights"):
+                tpf.run_training(
+                    tpf.parse_args(
+                        [
+                            "--run-id", run_id,
+                            "--data", str(mini_dataset_v3),
+                            "--phase", "joint",
+                            "--epochs", "1",
+                            "--batch", "4",
+                        ]
+                    )
+                )
+            assert not (freeze_dir.parent / "joint").exists()
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
+
+
+class TestResumeImgsz:
+    """Resume imgsz policy: inherit the checkpoint's size unless explicitly
+    passed; a different explicit size is refused early (review issue 5)."""
+
+    @staticmethod
+    def _prepare(monkeypatch):
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: {})
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+
+    @staticmethod
+    def _run(data, checkpoint, run_id, extra=()):
+        return tpf.run_training(
+            tpf.parse_args(
+                [
+                    "--run-id", run_id,
+                    "--data", str(data),
+                    "--init-from", str(checkpoint),
+                    "--epochs", "1",
+                    "--batch", "4",
+                    *extra,
+                ]
+            )
+        )
+
+    def _checkpoint(self, tmp_path):
+        return save_resume_checkpoint(
+            tmp_path, architecture="yolo26n-cls", imgsz=16, legacy_gray_weights=False
+        )
+
+    def test_resume_inherits_non_224_checkpoint_imgsz(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        self._prepare(monkeypatch)
+        checkpoint = self._checkpoint(tmp_path)
+        run_id = "test_resume_imgsz_inherit"
+        try:
+            run_dir = self._run(mini_dataset_v3, checkpoint, run_id)
+            config = json.loads(
+                (run_dir / "train_config.json").read_text(encoding="utf-8")
+            )
+            assert config["imgsz"] == 16
+            assert read_fusion_metadata(run_dir / "best.pt").imgsz == 16
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
+
+    def test_resume_explicit_same_imgsz_passes(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        self._prepare(monkeypatch)
+        checkpoint = self._checkpoint(tmp_path)
+        run_id = "test_resume_imgsz_same"
+        try:
+            run_dir = self._run(mini_dataset_v3, checkpoint, run_id, ("--imgsz", "16"))
+            config = json.loads(
+                (run_dir / "train_config.json").read_text(encoding="utf-8")
+            )
+            assert config["imgsz"] == 16
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
+
+    def test_resume_explicit_different_imgsz_refused_early(
+        self, tmp_path, mini_dataset_v3, fake_ultralytics, monkeypatch
+    ):
+        self._prepare(monkeypatch)
+        checkpoint = self._checkpoint(tmp_path)
+        run_id = "test_resume_imgsz_conflict"
+        with pytest.raises(ValueError, match="imgsz"):
+            self._run(mini_dataset_v3, checkpoint, run_id, ("--imgsz", "224"))
+        assert not (tpf.PROJECT_ROOT / "runs" / "train" / run_id).exists()
+
+    def test_fresh_run_defaults_to_224(
+        self, mini_dataset, monkeypatch
+    ):
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: {})
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+        monkeypatch.setattr(
+            tpf, "prepare_gray_backbone", TestLegacyArchitectureGate._fake_prepare("yolo26n-cls")
+        )
+        run_id = "test_fresh_imgsz_default"
+        try:
+            run_dir = tpf.run_training(
+                tpf.parse_args(
+                    [
+                        "--run-id", run_id,
+                        "--data", str(mini_dataset),
+                        "--gray-weights", "some-gray.pt",
+                        "--epochs", "1",
+                        "--batch", "4",
+                    ]
+                )
+            )
+            config = json.loads(
+                (run_dir / "train_config.json").read_text(encoding="utf-8")
+            )
+            assert config["imgsz"] == 224
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
 
 
 class TestEvalScript:

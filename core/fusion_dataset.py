@@ -42,29 +42,40 @@ QUALITY_VECTOR_LENGTH = len(QUALITY_VECTOR_KEYS)
 
 
 def dataset_fingerprint(data_root: str | Path) -> str:
-    """Stable sha256 over manifest, audit report and generation summary.
+    """Stable sha256 over the audit-recorded digests and generation summary.
 
-    Training runs record this so a checkpoint can be traced back to the
-    exact dataset state it was trained on. The audit report itself carries
-    the per-file content digests, so the fingerprint transitively covers
-    every npz sample's audited content.
+    Derived from the audit report's recorded digests (manifest, summary and
+    every referenced npz) rather than freshly hashing whatever happens to
+    be on disk, so the fingerprint identifies the audited dataset state.
+    Training only records it after :func:`verify_dataset_integrity` has
+    confirmed the current files still match those digests.
     """
     import hashlib
+    import json
 
     data_root = Path(data_root)
+    audit_path = data_root / "dataset_audit.json"
+    if not audit_path.is_file():
+        raise FileNotFoundError(f"missing dataset audit report: {audit_path}")
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    manifest_sha = audit.get("manifest_sha256")
+    summary_sha = audit.get("summary_sha256")
+    digests = audit.get("file_digests")
+    if not manifest_sha or not summary_sha or not digests:
+        raise ValueError(
+            f"{audit_path} lacks manifest/summary/per-file digests; re-run "
+            "the dataset audit before training"
+        )
     digest = hashlib.sha256()
-    for name in (
-        "dataset_manifest.csv",
-        "dataset_audit.json",
-        "dataset_summary.json",
-    ):
-        path = data_root / name
-        if not path.is_file():
-            continue  # summary is optional for hand-assembled datasets
-        digest.update(name.encode("utf-8"))
+    digest.update(b"manifest\0")
+    digest.update(str(manifest_sha).encode("ascii"))
+    digest.update(b"\0summary\0")
+    digest.update(str(summary_sha).encode("ascii"))
+    for relative in sorted(digests):
+        digest.update(b"\0npz\0")
+        digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
+        digest.update(str(digests[relative]).encode("ascii"))
     return digest.hexdigest()
 
 
@@ -76,38 +87,107 @@ def file_digest(path: str | Path) -> str:
 
 
 def verify_dataset_integrity(data_root: str | Path) -> dict:
-    """Re-verify every npz against the digests recorded at audit time.
+    """Re-verify the dataset against the digests recorded at audit time.
 
-    The audit report (``dataset_audit.json``) stores each sample's sha256;
-    this recomputes them so a modified, replaced or deleted npz is caught
-    before training even though the historic ``audit_passed`` verdict is
-    unchanged. Raises on any mismatch.
+    The audit report (``dataset_audit.json``) stores the sha256 of the
+    manifest, the generation summary and every referenced npz. This
+    recomputes them so any change after the audit (edited manifest rows,
+    changed generation parameters, replaced/deleted/added samples) is
+    refused before training even though the historic ``audit_passed``
+    verdict is unchanged. Raises on any mismatch.
     """
+    import csv
     import json
+    from collections import Counter
 
     data_root = Path(data_root)
-    audit = json.loads((data_root / "dataset_audit.json").read_text(encoding="utf-8"))
+    audit_path = data_root / "dataset_audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
     digests = audit.get("file_digests")
-    if not digests:
+    manifest_sha = audit.get("manifest_sha256")
+    summary_sha = audit.get("summary_sha256")
+    if not digests or not manifest_sha or not summary_sha:
         raise ValueError(
-            f"{data_root / 'dataset_audit.json'} records no per-file "
-            "digests; re-run the dataset audit before training"
+            f"{audit_path} lacks manifest/summary/per-file digests; re-run "
+            "the dataset audit (scripts/prepare_cls_fusion_dataset.py "
+            "--audit-only) before training"
         )
-    missing = []
+    empty = sorted(relative for relative, value in digests.items() if not value)
+    if empty:
+        raise ValueError(
+            "dataset files changed since the audit passed: the audit recorded "
+            f"no digest for {empty[:10]}; re-audit the dataset before training"
+        )
+
+    manifest_path = data_root / "dataset_manifest.csv"
+    summary_path = data_root / "dataset_summary.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"missing dataset manifest: {manifest_path}")
+    if not summary_path.is_file():
+        raise ValueError(
+            "dataset files changed since the audit passed: dataset_summary.json "
+            "is missing (a formal dataset must keep the summary it was audited "
+            "with); re-audit the dataset before training"
+        )
+    if file_digest(manifest_path) != manifest_sha:
+        raise ValueError(
+            "dataset files changed since the audit passed: dataset_manifest.csv "
+            "digest mismatch (split/group or sample rows were edited); re-audit "
+            "the dataset before training"
+        )
+    if file_digest(summary_path) != summary_sha:
+        raise ValueError(
+            "dataset files changed since the audit passed: dataset_summary.json "
+            "digest mismatch (generation parameters were edited); re-audit the "
+            "dataset before training"
+        )
+
+    with manifest_path.open(encoding="utf-8") as handle:
+        referenced = [row["npz_path"] for row in csv.DictReader(handle)]
+    counts = Counter(referenced)
+    duplicated = sorted(path for path, count in counts.items() if count > 1)[:10]
+    if duplicated:
+        raise ValueError(
+            "dataset files changed since the audit passed: dataset_manifest.csv "
+            f"has duplicate npz_path rows {duplicated}; re-audit the dataset "
+            "before training"
+        )
+    referenced_set = set(referenced)
+    digest_set = set(digests)
+    if referenced_set != digest_set:
+        raise ValueError(
+            "dataset files changed since the audit passed: manifest references "
+            f"and audited files differ (unreferenced_by_audit="
+            f"{sorted(referenced_set - digest_set)[:10]}, missing_from_manifest="
+            f"{sorted(digest_set - referenced_set)[:10]}); re-audit the dataset "
+            "before training"
+        )
+    disk_set = {
+        path.relative_to(data_root).as_posix() for path in data_root.rglob("*.npz")
+    }
+    if disk_set != referenced_set:
+        raise ValueError(
+            "dataset files changed since the audit passed: npz files on disk do "
+            f"not match the manifest (extra={sorted(disk_set - referenced_set)[:10]}, "
+            f"missing={sorted(referenced_set - disk_set)[:10]}); regenerate or "
+            "re-audit the dataset before training"
+        )
+
     changed = []
     for relative, expected in digests.items():
-        path = data_root / relative
-        if not path.is_file():
-            missing.append(relative)
-        elif file_digest(path) != expected:
+        if file_digest(data_root / relative) != expected:
             changed.append(relative)
-    if missing or changed:
+    if changed:
         raise ValueError(
             "dataset files changed since the audit passed: "
-            f"missing={missing[:10]} changed={changed[:10]}; "
-            "regenerate or re-audit the dataset before training"
+            f"changed={changed[:10]}; regenerate or re-audit the dataset "
+            "before training"
         )
-    return {"verified_files": len(digests)}
+    return {
+        "verified_files": len(digests),
+        "manifest_sha256": manifest_sha,
+        "summary_sha256": summary_sha,
+    }
 
 
 @dataclasses.dataclass(frozen=True)

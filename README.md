@@ -43,6 +43,7 @@
 | `datasets/underwater_cls_gray_v2` | Model B 灰度分类裁剪，2808 张 |
 | `datasets/underwater_cls_polar_v2` | Model B 偏振分类裁剪，2808 张 |
 | `datasets/underwater_cls_fusion_v3` | Polar Fusion 数值 npz 数据集，2808 个样本（gray/signed_q/abs_q/valid/quality/class_id + manifest） |
+| `datasets/underwater_cls_fusion_v4_band` | 同上，视差改为与在线推理一致的条带匹配（band_margin=20，训练主线默认数据） |
 | `runs/train/run_20260913_initial/model_baseline` | 正式四类分割 baseline |
 | `runs/train/run_20260913_initial/model_a` | 正式二值实例分割模型 |
 | `runs/train/run_20260913_initial/model_b-gray` | 已验收的默认分类模型 |

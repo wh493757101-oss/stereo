@@ -25,6 +25,8 @@
     "val": 368,
     "test": 362
   },
+  "manifest_sha256": "e93fe84b0c71b2dc43ed09a6d1809d1403c438f5a1f5b9e4934d1b216f41b92c",
+  "summary_sha256": "5b7a5d0fcb5882482d28607082fb1a4e43ea4174b91cbb39c83eafdf3b479af2",
   "counts": {
     "total": 2808,
     "train": 2078,
