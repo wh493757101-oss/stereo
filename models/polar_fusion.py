@@ -390,6 +390,11 @@ class FusionCheckpointMetadata:
     gray_class_names: tuple[str, ...] = ()
     head_replaced: bool = False
     class_permutation: tuple[int, ...] = ()
+    # Actual batch truncation used by the training run and its smoke marker.
+    # ``None`` means "not recorded" (old checkpoints): such checkpoints stay
+    # loadable for inference but must never default-pass formal admission.
+    limit_batches: int | None = None
+    smoke: bool | None = None
 
 
 def fusion_metadata(
@@ -401,6 +406,8 @@ def fusion_metadata(
     gray_class_names: Sequence[str] = (),
     head_replaced: bool = False,
     class_permutation: Sequence[int] = (),
+    limit_batches: int | None = None,
+    smoke: bool | None = None,
 ) -> FusionCheckpointMetadata:
     return FusionCheckpointMetadata(
         version=FUSION_VERSION,
@@ -414,6 +421,8 @@ def fusion_metadata(
         gray_class_names=tuple(str(name) for name in gray_class_names),
         head_replaced=bool(head_replaced),
         class_permutation=tuple(int(i) for i in class_permutation),
+        limit_batches=limit_batches,
+        smoke=smoke,
     )
 
 
@@ -442,6 +451,8 @@ def save_fusion_checkpoint(
         "gray_class_names": list(metadata.gray_class_names),
         "head_replaced": metadata.head_replaced,
         "class_permutation": list(metadata.class_permutation),
+        "limit_batches": metadata.limit_batches,
+        "smoke": metadata.smoke,
         "state_dict": model.state_dict(),
     }
     if extra:
@@ -468,6 +479,8 @@ def _metadata_from_payload(path: str | Path, payload: dict[str, Any]) -> FusionC
         gray_class_names=tuple(str(n) for n in payload.get("gray_class_names", ())),
         head_replaced=bool(payload.get("head_replaced", False)),
         class_permutation=tuple(int(i) for i in payload.get("class_permutation", ())),
+        limit_batches=payload.get("limit_batches"),
+        smoke=payload.get("smoke"),
     )
 
 

@@ -114,7 +114,7 @@ class TestDeviceMapping:
             tpf.torch_device_name("tpu")
 
     def test_resolve_device_validates_cuda_before_mapping(self, monkeypatch):
-        from scripts.train_models import DeviceUnavailableError
+        from scripts.training_common import DeviceUnavailableError
 
         monkeypatch.setattr("torch.cuda.is_available", lambda: False)
         with pytest.raises(DeviceUnavailableError):
@@ -1411,6 +1411,72 @@ class TestResumeImgsz:
                 (run_dir / "train_config.json").read_text(encoding="utf-8")
             )
             assert config["imgsz"] == 224
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
+
+
+class TestFusionSmokeMetadata:
+    """Fusion train_config and checkpoint metadata must record the actual
+    limit_batches and an explicit smoke marker (review issue 3)."""
+
+    @staticmethod
+    def _prepare(monkeypatch):
+        monkeypatch.setattr(tpf, "validate_dataset", lambda root: {})
+        monkeypatch.setattr(tpf, "resolve_device", lambda *a, **kw: "cpu")
+        monkeypatch.setattr(
+            tpf, "prepare_gray_backbone",
+            TestLegacyArchitectureGate._fake_prepare("yolo26n-cls"),
+        )
+
+    def _run(self, mini_dataset, run_id, extra=()):
+        return tpf.run_training(
+            tpf.parse_args(
+                [
+                    "--run-id", run_id,
+                    "--data", str(mini_dataset),
+                    "--epochs", "1",
+                    "--batch", "4",
+                    "--gray-weights", "some-gray.pt",
+                    *extra,
+                ]
+            )
+        )
+
+    def test_formal_defaults_recorded(self, mini_dataset, monkeypatch):
+        self._prepare(monkeypatch)
+        run_id = "test_fusion_meta_formal"
+        try:
+            run_dir = self._run(mini_dataset, run_id)
+            config = json.loads(
+                (run_dir / "train_config.json").read_text(encoding="utf-8")
+            )
+            assert config["limit_batches"] == 0
+            assert config["smoke"] is False
+            payload = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
+            assert payload["limit_batches"] == 0
+            assert payload["smoke"] is False
+            metadata = read_fusion_metadata(run_dir / "last.pt")
+            assert metadata.limit_batches == 0
+            assert metadata.smoke is False
+        finally:
+            shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
+
+    def test_truncated_run_marked_smoke(self, mini_dataset, monkeypatch):
+        self._prepare(monkeypatch)
+        run_id = "test_fusion_meta_smoke"
+        try:
+            run_dir = self._run(mini_dataset, run_id, ("--limit-batches", "1"))
+            config = json.loads(
+                (run_dir / "train_config.json").read_text(encoding="utf-8")
+            )
+            assert config["limit_batches"] == 1
+            assert config["smoke"] is True
+            payload = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
+            assert payload["limit_batches"] == 1
+            assert payload["smoke"] is True
+            metadata = read_fusion_metadata(run_dir / "last.pt")
+            assert metadata.limit_batches == 1
+            assert metadata.smoke is True
         finally:
             shutil.rmtree(tpf.PROJECT_ROOT / "runs" / "train" / run_id, ignore_errors=True)
 

@@ -114,32 +114,53 @@ python scripts/prepare_cls_fusion_dataset.py --clean
 
 ## 训练
 
-正式权重已经存在，按 run id 分组在 `runs/train/run_20260913_initial/` 下。重新训练时必须提供新的 run id，输出会写入 `runs/train/<run-id>/model_<stage>/`。推荐用总控脚本顺序训练全部四个模型：
+当前主线是独立的三阶段总控 `scripts/train_pipeline.py`：固定串行顺序，每阶段独立 Python 子进程、同一 run id，前一阶段完成并通过产物检查后才启动下一阶段：
+
+1. `model_a`：YOLO26 二值实例分割 → `runs/train/<run-id>/model_a/`
+2. `gray_fusion`：与 Fusion 同数据、同预处理的四分类 Gray-only → `runs/train/<run-id>/gray_fusion/`
+3. `fusion_freeze`：使用本轮 Gray 最佳权重冻结 Gray、只训练偏振增量和 gate → `runs/train/<run-id>/polar_fusion/freeze/`
 
 ```powershell
-python scripts/train_all_models.py --device 0 --run-id <run-id>
+# 预检（只读：不创建训练目录或报告、不下载、不训练；--preflight 与 --preflight-only 等价）
+python scripts/train_pipeline.py --run-id <run-id> --device 0 --preflight
+
+# 正式三阶段训练
+python scripts/train_pipeline.py --run-id <run-id> --device 0
+
+# 有界全链路冒烟（Model A 1 epoch × 数据比例；Gray/Fusion 2 epoch × ≤3 batch）
+python scripts/train_pipeline.py --run-id <smoke-run-id> --device 0 --smoke
+
+# 继续尚未完成的阶段（不是完整断点续训；已存在输出的阶段会被拒绝，不会重跑）
+python scripts/train_pipeline.py --run-id <run-id> --device 0 --stages gray_fusion fusion_freeze
 ```
 
-总控脚本为每个阶段启动独立 Python 进程，按 `baseline`、`a`、`b-gray`、`b-polar` 顺序执行，任何阶段失败都会停止后续阶段。若中断后只需继续未完成阶段，可显式选择：
+各阶段参数可独立覆盖：`--model-a-epochs/--model-a-batch/--model-a-imgsz`（默认 100/8/640）、`--gray-epochs/--gray-batch/--gray-imgsz`（默认 30/32/224）、`--fusion-epochs/--fusion-batch/--fusion-imgsz`（默认 30/32/224）；Gray 与 Fusion 的 imgsz 必须一致。总控在任何子进程启动前检查：选中阶段输出冲突、基座存在且任务/架构正确（Model A 必须 `yolo26n-seg.pt`、Gray 必须 `yolo26n-cls.pt`）、分割数据为单类 `0: target`（四类 YAML 被拒；逐标签校验整数类 0、polygon 结构、有限坐标；无标签文件或空标签属于合法背景图，但每个 split 必须至少有一个有效 polygon）、V4 严格数据准入与非空指纹、GPU 可用性、参数合法性；仅选择 Fusion 时必须验证本轮 Gray 产物存在、兼容、非 smoke 且其数据指纹与当前 V4 一致。每阶段结束后核对产物（best/last 可加载、真实架构、单类/类别顺序、输入尺寸、数据来源、Macro-F1 优先选模证据、配置与 checkpoint 的 `dataset_fingerprint`/`limit_batches`/`smoke` 一致）而不是只看退出码。运行记录写入 `runs/train/<run-id>/pipeline_report.json`：版本化累计结构（`attempts` 逐次保留命令、起止时间、退出码、产物、来源与失败/中断状态；`stage_status`/`pipeline_complete`/`remaining_stages` 汇总），采用原子写入，损坏或 run-id 不一致的旧报告会被拒绝而不是覆盖；只跑部分阶段时不会报告完整流水线完成。Fusion 始终使用 `runs/train/<run-id>/gray_fusion/best.pt`，绝不回退历史 Gray 权重或 smoke Gray 权重；smoke 与正式产物通过记录在配置和 checkpoint 中的 `limit_batches`/`smoke` 严格区分，缺失或类型非法的字段不会按正式全量训练处理。
+
+旧四阶段训练（`baseline`/`a`/`b-gray`/`b-polar`）已归档到 `scripts/legacy_four_stage/`（含 README、新旧路径映射与显式运行方式）；原 `scripts/train_models.py`、`scripts/train_all_models.py`、`scripts/train_seg.py` 现在是退役提示入口：只打印提示并以非零退出，不会训练，也不会静默转发到新三阶段。
+
+run id 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能包含路径分隔符。训练固定 seed `2026`、确定性模式、AMP 和 early stopping。Windows 默认 `workers=0`，避免子进程重新加载 CUDA DLL 失败。开发默认基座为 YOLO26nano：分割 `yolo26n-seg.pt`、分类 `yolo26n-cls.pt`（见 `scripts/training_common.py` 的 `SEG_BASE`/`CLS_BASE`）；本地 `yolo26n.pt` 是检测模型，所有训练入口都会拒绝。已有 YOLOv8 权重、报告和配置仅作历史对照，正式运行时配置（`configs/default.yaml` 中 `model_b.path` 的 Gray 权重）保持不变。
+
+**状态区分**：训练完成 ≠ 技术验证通过 ≠ 模型质量合格。总控的阶段产物检查只证明链路执行正确、产物技术合格；模型质量与部署由后续评审决定，冒烟截断指标不能作为合格依据。
+
+### Gray-only（Fusion 对照）与真实链路验证
+
+Polar Fusion 的公平对照是独立入口 `scripts/train_gray_fusion.py`：与 Fusion 使用相同数据（默认 `datasets/underwater_cls_fusion_v4_band`）、相同 split、相同类别顺序、相同直接缩放预处理（`FusionClsDataset` 的 gray 通道，无数据增强）和相同 `imgsz`（默认 224），训练整个 YOLO26 分类模型的 gray 通道；选模与 Fusion 一致（完整 val，Macro-F1 优先、accuracy 次优；test 不参与）。`--base` 必须是本地存在的 YOLO26 分类基座（如 `yolo26n-cls.pt`），检测模型 `yolo26n.pt` 与 YOLOv8 权重会被拒绝。注意：Ultralytics 分类基座加载时全部参数处于冻结状态（`requires_grad=False`），本入口在创建优化器前显式解冻全部参数（不重新初始化权重），是真正的全模型训练而非线性探测；`train_config.json` 记录 `parameters_total`/`parameters_trainable` 以便核验。
 
 ```powershell
-python scripts/train_all_models.py --device 0 --run-id <run-id> --stages b-gray b-polar
+python scripts/train_gray_fusion.py --device 0 --run-id <run-id>
 ```
 
-也可以单独训练某个阶段：
+输出在 `runs/train/<run-id>/gray_fusion/`（`best.pt`、`last.pt`、`train_config.json`、`metrics.json`），目录已存在时拒绝。checkpoint 是标准 Ultralytics 分类格式（4 类头、数据集类别顺序），可直接作为 Fusion 的 Gray 分支：
 
 ```powershell
-python scripts/train_models.py --stage baseline --device 0 --run-id <run-id>
-python scripts/train_models.py --stage a --device 0 --run-id <run-id>
-python scripts/train_models.py --stage b-gray --device 0 --run-id <run-id>
-python scripts/train_models.py --stage b-polar --device 0 --run-id <run-id>
+python scripts/train_polar_fusion.py --device 0 --run-id <fusion-run-id> --phase freeze --gray-weights runs/train/<run-id>/gray_fusion/best.pt
 ```
 
-run id 只能包含 ASCII 字母、数字、`.`、`_`、`-`，不能包含路径分隔符。总控脚本会在训练前检查所有选中模型的目标目录；若目录已存在，会拒绝启动，避免生成含义不清的递增目录。
+smoke 与正式训练的区别：`--limit-batches` 为正数时截断每个 epoch 的 train/val batch 数并在 `train_config.json` 记录 `smoke: true`；截断运行的指标只能证明链路可执行，不能作为模型合格依据。正式训练使用 `--limit-batches 0`。
 
-训练固定 seed `2026`、确定性模式、AMP 和 early stopping。Windows 默认 `workers=0`，避免子进程重新加载 CUDA DLL 失败。
+真实链路验证入口 `scripts/verify_yolo26_fusion.py` 在 GPU 上做有界冒烟（2 epoch × ≤3 batch/阶段）：Gray 训练 → 保存重载 → Fusion freeze（gray 冻结、delta/gate 学习、无效偏振严格回退）→ 权重接续；输出与 `verify_report.json` 保留在 `runs/train/<run-id>*` 下供审查。
 
-开发默认基座自 2026-09-14 起切换为 YOLO26nano：分割用 `yolo26n-seg.pt`，分类用 `yolo26n-cls.pt`（见 `scripts/train_models.py` 的 `SEG_BASE`/`CLS_BASE`）。本地 `yolo26n.pt` 是检测模型，不用于 Model A 或 Model B；`yolo26n-seg.pt`/`yolo26n-cls.pt` 本地缺失时需在有网络时下载，不会自动替换为其他权重。已有 YOLOv8 权重、报告和配置仅作历史对照，正式运行时配置（`configs/default.yaml` 中 `model_b.path` 的 Gray 权重）保持不变。
+Fusion 的 `--init-from` 语义是权重接续：加载 checkpoint 权重后重建优化器，不恢复 optimizer/RNG 状态；省略 `--imgsz` 时继承 checkpoint 的训练尺寸，显式冲突尺寸会提前拒绝且不创建目录。Gray/Fusion checkpoint 依赖其记录的基座文件（如 `yolo26n-cls.pt`）与 Gray 权重文件仍在原路径，重载时不做自动下载或替换。
 
 ## 测试
 

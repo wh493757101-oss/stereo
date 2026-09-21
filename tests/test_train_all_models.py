@@ -1,9 +1,11 @@
-"""Tests for the sequential all-model training launcher."""
+"""Tests for the archived sequential four-stage launcher
+(scripts.legacy_four_stage.train_all_models). The active three-stage
+pipeline is covered by tests/test_train_pipeline.py."""
 
 from pathlib import Path
 from types import SimpleNamespace
 
-import scripts.train_all_models as launcher
+import scripts.legacy_four_stage.train_all_models as launcher
 
 
 RUN_ID = "run_20260914_manual_labels"

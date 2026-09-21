@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -60,7 +61,7 @@ from models.polar_fusion import (
     save_fusion_checkpoint,
     torch_device_name,
 )
-from scripts.train_models import DeviceUnavailableError, InvalidRunIdError, resolve_device, validate_run_id
+from scripts.training_common import DeviceUnavailableError, InvalidRunIdError, resolve_device, validate_run_id
 
 DEFAULT_SEED = 2026
 DEFAULT_IMGSZ = 224
@@ -612,6 +613,8 @@ def run_training(args: argparse.Namespace) -> Path:
             gray_class_names=gray_info["gray_class_names"],
             head_replaced=gray_info["head_replaced"],
             class_permutation=tuple(gray_info["perm"]) if gray_info["perm"] else (),
+            limit_batches=int(args.limit_batches),
+            smoke=args.limit_batches > 0,
         )
     else:
         init_payload = torch.load(init_checkpoint, map_location="cpu", weights_only=False)
@@ -636,6 +639,13 @@ def run_training(args: argparse.Namespace) -> Path:
         )
         imgsz = _resolve_imgsz(args.imgsz, metadata.imgsz)
         _verify_backbone_output(backbone, imgsz, num_classes, device)
+        # The new checkpoint records this run's actual truncation state, so
+        # config and checkpoint metadata never contradict each other.
+        metadata = dataclasses.replace(
+            metadata,
+            limit_batches=int(args.limit_batches),
+            smoke=args.limit_batches > 0,
+        )
 
     # Phase freeze: gray weights are fixed; joint: everything trains, with
     # the backbone at the lower --gray-lr rate.
@@ -767,6 +777,8 @@ def run_training(args: argparse.Namespace) -> Path:
                 "lambda_gray": args.lambda_gray,
                 "lambda_kd": args.lambda_kd,
                 "seed": args.seed,
+                "limit_batches": int(args.limit_batches),
+                "smoke": args.limit_batches > 0,
                 "device": device,
                 "version": FUSION_VERSION,
             },

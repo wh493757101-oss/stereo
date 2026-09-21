@@ -17,10 +17,10 @@ Authoritative docs: `README.md` (usage), `HANDOVER.md` (acceptance state, invari
 5. Channel modes are fixed: `gray` = `[gray, gray, gray]`, `polar` = `[gray, polar, gray]`.
 6. Datasets are split by complete capture group (train/val/test = 765/180/180 images, 17/4/4 groups). Never split a continuous capture sequence across splits.
 7. Without measurable timestamps, sync status must be reported as `unknown`, never `0 ms`.
-8. Training runs require a fresh `--run-id` (ASCII letters/digits/`.`/`_`/`-` only); outputs go to `runs/train/<run-id>/model_<stage>/`. Existing target directories are never overwritten.
+8. Training runs require a fresh `--run-id` (ASCII letters/digits/`.`/`_`/`-` only); mainline outputs go to `runs/train/<run-id>/model_a/`, `runs/train/<run-id>/gray_fusion/` and `runs/train/<run-id>/polar_fusion/freeze/` (the archived four-stage code used `model_<stage>/`). Existing target directories are never overwritten.
 9. Never delete: original `datasets/Single`/`Mixed`, `datasets/bd_image`, any v2 datasets, the four official `best.pt` weights under `runs/train/run_20260913_initial/`, or polar ablation assets.
 10. Claims like "polarization helps", "real-time", or "depth is accurate" must be backed by the paired ablation bootstrap, full-pipeline benchmark, or distance ground truth respectively. Current honest state: polar gain NOT proven (default is `gray`), pipeline ≈ 6 FPS (NOT 30 FPS real-time), no distance accuracy validation yet.
-11. The dev base model is YOLO26nano (`yolo26n-seg.pt` / `yolo26n-cls.pt`, see `SEG_BASE`/`CLS_BASE` in `scripts/train_models.py`). Local `yolo26n.pt` is a detection model and must never be used as a Model A/B base.
+11. The dev base model is YOLO26nano (`yolo26n-seg.pt` / `yolo26n-cls.pt`, see `SEG_BASE`/`CLS_BASE` in `scripts/training_common.py`). Local `yolo26n.pt` is a detection model and must never be used as a Model A/B base.
 
 ## Commands
 
@@ -36,12 +36,18 @@ D:/Python/CondaPkgs/stereo/python.exe -m pytest tests/test_stereo_matching.py::<
 # Launch GUI
 D:/Python/CondaPkgs/stereo/python.exe -m gui.main_window
 
-# Train all four stages (order: baseline, a, b-gray, b-polar), or resume selected stages
-D:/Python/CondaPkgs/stereo/python.exe scripts/train_all_models.py --device 0 --run-id <run-id>
-D:/Python/CondaPkgs/stereo/python.exe scripts/train_all_models.py --device 0 --run-id <run-id> --stages b-gray b-polar
+# Three-stage mainline (fixed order: model_a, gray_fusion, fusion_freeze)
+D:/Python/CondaPkgs/stereo/python.exe scripts/train_pipeline.py --run-id <run-id> --device 0 --preflight-only
+D:/Python/CondaPkgs/stereo/python.exe scripts/train_pipeline.py --run-id <run-id> --device 0
+D:/Python/CondaPkgs/stereo/python.exe scripts/train_pipeline.py --run-id <smoke-run-id> --device 0 --smoke
+D:/Python/CondaPkgs/stereo/python.exe scripts/train_pipeline.py --run-id <run-id> --device 0 --stages gray_fusion fusion_freeze
 
-# Train one stage
-D:/Python/CondaPkgs/stereo/python.exe scripts/train_models.py --stage <baseline|a|b-gray|b-polar> --device 0 --run-id <run-id>
+# Single stages (used by the pipeline; run directly only when needed)
+D:/Python/CondaPkgs/stereo/python.exe scripts/train_model_a.py --run-id <run-id> --device 0
+D:/Python/CondaPkgs/stereo/python.exe scripts/train_gray_fusion.py --run-id <run-id> --device 0
+D:/Python/CondaPkgs/stereo/python.exe scripts/train_polar_fusion.py --run-id <run-id> --phase freeze --gray-weights runs/train/<run-id>/gray_fusion/best.pt --device 0
+# Retired entries (scripts/train_models.py, train_all_models.py, train_seg.py) only print a
+# notice and exit non-zero; the archived four-stage code is scripts/legacy_four_stage/.
 
 # Polar fusion model (V3/V4 npz dataset): dataset → train → eval
 D:/Python/CondaPkgs/stereo/python.exe scripts/prepare_cls_fusion_dataset.py --clean   # writes datasets/underwater_cls_fusion_v4_band

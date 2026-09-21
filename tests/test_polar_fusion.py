@@ -205,6 +205,39 @@ class TestGrayInitMetadata:
         assert loaded.base_model == "yolo26n-cls.pt"
 
 
+class TestSmokeMetadataFields:
+    """limit_batches/smoke round-trip; old checkpoints read as None so they
+    can never default-pass formal admission (review issue 3)."""
+
+    def test_roundtrip_preserves_smoke_fields(self, tmp_path):
+        model = PolarFusionModel(TinyBackbone(4), num_classes=4)
+        meta = fusion_metadata(
+            ["w", "x", "y", "z"], limit_batches=3, smoke=True
+        )
+        path = save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+        loaded = read_fusion_metadata(path)
+        assert loaded == meta
+        assert loaded.limit_batches == 3
+        assert loaded.smoke is True
+
+    def test_defaults_are_none(self):
+        meta = fusion_metadata(["w", "x", "y", "z"])
+        assert meta.limit_batches is None
+        assert meta.smoke is None
+
+    def test_old_checkpoint_without_fields_reads_none(self, tmp_path):
+        model = PolarFusionModel(TinyBackbone(4), num_classes=4)
+        meta = fusion_metadata(["w", "x", "y", "z"])
+        path = save_fusion_checkpoint(tmp_path / "fusion.pt", model, meta)
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        del payload["limit_batches"]
+        del payload["smoke"]
+        torch.save(payload, path)
+        loaded = read_fusion_metadata(path)
+        assert loaded.limit_batches is None
+        assert loaded.smoke is None
+
+
 class TestHeads:
     def test_delta_net_output_shape(self):
         delta = PolarDeltaNet(num_classes=4)

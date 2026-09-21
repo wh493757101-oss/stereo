@@ -1,5 +1,10 @@
-"""Tests for scripts.train_models (stage defaults, argument construction,
-CUDA fail-fast) and the scripts.train_seg backward-compatible shim."""
+"""Tests for the archived four-stage trainer
+(scripts.legacy_four_stage.train_models: stage defaults, argument
+construction, CUDA fail-fast) and the archived train_seg shim.
+
+The active three-stage mainline is covered by tests/test_train_pipeline.py
+and tests/test_train_model_a.py.
+"""
 
 import sys
 from pathlib import Path
@@ -9,8 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import scripts.train_models as tm
-import scripts.train_seg as ts
+import scripts.legacy_four_stage.train_models as tm
+import scripts.legacy_four_stage.train_seg as ts
 
 
 class TestStageDefaults:
