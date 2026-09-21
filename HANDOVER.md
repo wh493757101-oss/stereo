@@ -168,6 +168,13 @@ macro-F1 差值仅 `+0.000185`，按采集组 bootstrap 的 95% CI 为 `[-0.0029
 - 真实有界 smoke（run `verify_three_stage_guards_20260921_112537`，RTX 4060 Laptop）：预检（`--smoke --preflight`）exit 0 且零写入；smoke 三阶段全部 PASSED（Model A 1 epoch × 1% 数据、Gray/Fusion 2 epoch × ≤3 batch，命令参数已核对）；报告 `report_version=2`、`pipeline_complete=True`；新 Fusion smoke 产物只读验证：smoke 验收通过（smoke=true/limit_batches=3），`require_formal=True` 按"smoke field must be exactly false"拒绝；同 run-id 继续执行对已存在阶段目录 exit 2 拒绝、不重跑。
 - 正式三阶段训练尚未启动；数据、审计 JSON、正式权重、`configs/default.yaml` 与既有输出未修改（V4 指纹复核一致）。
 
+### 2026-09-21 yolo26_formal_001 Fusion 退化诊断（只读，未训练）
+
+- 新增 `scripts/diagnose_polar_fusion.py`：单 checkpoint 只读诊断（Gray-only / 真实偏振 Fusion / 两种强制无效回退精确性 / 全量 test 索引偏振打乱 5 seeds），评估前强制校验数据指纹（配置与 checkpoint）、类别顺序、imgsz、freeze/正式标记、Gray 来源，以及 Fusion 内 Gray 分支与独立 Gray 权重逐参数逐 buffer 一致；输出 `summary.json`、`predictions.csv`、`changed_predictions.csv`、`summary.md` 与变化样本拼图；已有输出目录拒绝；不训练、不做 backward、不按 test 选型。对应测试 `tests/test_diagnose_polar_fusion.py`（24 项）。
+- 诊断 run：`analysis/runs/yolo26_formal_001/diagnostics_20260921_195201`。完全复现正式评测：Gray acc=0.964088（错 13）、Fusion acc=0.955801（错 16）、预测变化 5（状态 PASSED）。
+- 关键证据：两种强制回退 gate 精确 0 且 final==gray（0 失败，max diff 0.0）；Fusion gray 分支与独立 Gray 权重 119 参数 + 117 buffer 完全一致；5 个变化样本 = 4 个 real_fish 由对改错（gate≈0.606–0.609、valid_ratio 0.71–0.76、brightness≈1.0、gate*delta 相对 gray logits 范数 0.39–0.59，来自同一采集组连续帧）+ 1 个 plastic_submarine 由错改对；real_fish 召回 0.9518→0.9036，其余类别不变或略升；打乱偏振 5 seeds 的 acc 0.9558–0.9586（mean 0.956354，σ=0.0011）与真实 Fusion（0.955801）几乎一致。
+- 结论（限本轮 test 证据，不泛化）：偏振通道在 test 上未带来超过 gray 的净收益；Fusion 相对 Gray 的退化集中于 4 个同组 real_fish 样本上由较强 polar delta 引起的翻转。打乱实验为破坏对应关系的诊断，不构成因果证明。未训练、未替换权重、未修改受保护资产。
+
 ## 已解决问题的影响
 
 | 原问题 | 若不修复的影响 | 当前处理 |

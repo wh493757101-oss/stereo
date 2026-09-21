@@ -158,6 +158,21 @@ python scripts/train_polar_fusion.py --device 0 --run-id <fusion-run-id> --phase
 
 smoke 与正式训练的区别：`--limit-batches` 为正数时截断每个 epoch 的 train/val batch 数并在 `train_config.json` 记录 `smoke: true`；截断运行的指标只能证明链路可执行，不能作为模型合格依据。正式训练使用 `--limit-batches 0`。
 
+### Fusion 退化诊断（只读）
+
+`scripts/diagnose_polar_fusion.py` 对单个已训练 Fusion checkpoint 做只读诊断（不训练、不做 backward、不按 test 分数选 checkpoint），解释 Fusion 相对 Gray 的退化：
+
+```powershell
+python scripts/diagnose_polar_fusion.py `
+  --checkpoint runs/train/<run-id>/polar_fusion/freeze/best.pt `
+  --gray-weights runs/train/<run-id>/gray_fusion/best.pt `
+  --data datasets/underwater_cls_fusion_v4_band --split test `
+  --device 0 --batch 32 --shuffle-seeds 2026 2027 2028 2029 2030 `
+  --output-dir analysis/runs/<run-id>/diagnostics_<timestamp>
+```
+
+评估前强制校验：数据指纹与 Gray/Fusion 配置及 checkpoint 一致、类别顺序/imgsz/freeze/正式标记、Fusion 的 Gray 来源为本轮 Gray，且 Fusion 内 Gray 分支与独立 Gray 权重逐参数逐 buffer 一致（不一致拒绝）。条件包括：Gray-only、真实偏振 Fusion、两种强制无效回退（`polar_invalid` 与 `valid_ratio=0`；gate 必须精确为 0 且 final 与 gray logits 精确相等，否则诊断状态 FAILED）、以及全量 test 索引上的偏振对应关系打乱（每 seed 一个无固定点双射，polar 三通道与 quality 始终来自同一 donor，映射与 batch 划分无关；所有 seed 全部报告，不选最优）。输出 `summary.json`、`predictions.csv`、`changed_predictions.csv`、`summary.md` 与变化样本诊断拼图；输出目录已存在时拒绝。注意：打乱实验是破坏偏振-灰度对应关系的诊断证据，不构成因果证明；gate 是学习到的标量门控，不是校准置信度。
+
 真实链路验证入口 `scripts/verify_yolo26_fusion.py` 在 GPU 上做有界冒烟（2 epoch × ≤3 batch/阶段）：Gray 训练 → 保存重载 → Fusion freeze（gray 冻结、delta/gate 学习、无效偏振严格回退）→ 权重接续；输出与 `verify_report.json` 保留在 `runs/train/<run-id>*` 下供审查。
 
 Fusion 的 `--init-from` 语义是权重接续：加载 checkpoint 权重后重建优化器，不恢复 optimizer/RNG 状态；省略 `--imgsz` 时继承 checkpoint 的训练尺寸，显式冲突尺寸会提前拒绝且不创建目录。Gray/Fusion checkpoint 依赖其记录的基座文件（如 `yolo26n-cls.pt`）与 Gray 权重文件仍在原路径，重载时不做自动下载或替换。

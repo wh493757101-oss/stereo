@@ -1,6 +1,8 @@
 # Data and generated artifacts
 datasets/
 /runs/
+# Local evaluation and diagnostic reports for this training run
+/analysis/runs/yolo26_formal_001/
 archives/*.zip
 *.pt
 *.pth
