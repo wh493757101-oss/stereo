@@ -1,0 +1,73 @@
+# CMX material-fusion experiment v2 (configs/experiments/material_fusion_v2_mask.yaml)
+#
+# Third-round A1 protocol: the second-round experiment with exactly one
+# training-side factor changed — the classification head's global average
+# pooling is replaced by instance-mask weighted pooling on the V5 dataset.
+#
+# Everything else is byte-identical to material_fusion_v1: the same MiT-B0 /
+# CMX encoder and FRM/FFM, the same four variants and channel meanings, the
+# same Gray/signed_q/abs_q/valid values and scaling, the same 224 input with
+# the same interpolation, the same head projection/concat/LayerNorm/Dropout/
+# classifier, the same loss, optimizer, learning rates, data order, selection
+# rule and warmup->finetune budget, and the same independent gray fallback.
+#
+# All four variants receive the same instance mask and the same pooling rule;
+# no variant is given the mask on its own.
+#
+# Smoke runs override explicitly on the command line:
+#   --epochs 2 --warmup-epochs 1 --limit-batches 3
+# The effective batch (batch * accum_steps) is the protocol constant and is
+# identical for every variant and for smoke/formal runs.
+
+experiment: material_fusion_v2_mask
+
+# E1 gray / E2 gray_gray_valid / E3 gray_valid / E4 gray_polar (main candidate).
+variant: gray_polar
+
+data: datasets/underwater_cls_fusion_v5_instance_mask
+# V5 fingerprint (core.material_mask_dataset.mask_dataset_fingerprint); it
+# binds the V5 manifest/summary/npz digests, the mask content, the annotation
+# source summary, the sample/crop mapping and the schema versions.
+data_fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+
+# Official MiT-B0 ImageNet-1K backbone (nvidia/mit-b0), verified SHA256.
+# A formal v2 run initialises from the same official pretrained weights as v1
+# and never continues from a v1 best checkpoint (that would import a
+# different training history into the comparison).
+pretrained: weights/pretrained/mit_b0.pth
+pretrained_sha256: 4af8348c2a802bf76115d34797ff5ce1d9f110bb8593c22d9b66d8bd7fa227fc
+
+# CMX upstream pin (huaaaliu/RGBX_Semantic_Segmentation).
+upstream_commit: e251d860aebc2f583a6c4919877e6bebe7f1aff3
+preprocessing_version: v4_band_224_area_linear_v1
+
+# Instance-mask pooling contract. The V4 parent fingerprint pins the exact V4
+# state the mask extension was derived from.
+pooling_mode: instance_mask
+mask_schema: instance_mask_polygon_crop_v1
+mask_resize_version: area_crop_to_imgsz_then_area_to_levels_v1
+parent_data_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+
+imgsz: 224
+batch: 8
+accum_steps: 2
+effective_batch: 16
+
+epochs: 30
+warmup_epochs: 2
+
+optimizer: adamw
+weight_decay: 0.01
+lr: 0.0001
+encoder_lr: 0.00001
+
+seed: 2026
+workers: 0
+
+# Independent historical gray Model B for polar-invalid fallback routing
+# (identity-verified at evaluation time; never auto-substituted).
+fallback_weights: runs/train/yolo26_formal_001/gray_fusion/best.pt
+fallback_identity: yolo26n-cls 4-class metal_submarine/plastic_submarine/plastic_fish/real_fish
+
+smoke: false
+limit_batches: 0

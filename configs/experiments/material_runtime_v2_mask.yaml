@@ -1,0 +1,133 @@
+# Material fusion v2_mask — independent runtime integration (4A)
+#
+# This config pins the identities the material_fusion runtime mode uses for
+# the engineering integration round. It does NOT change configs/default.yaml,
+# the legacy gray/polar/fusion modes, or any training protocol. All 12
+# candidates of the frozen 4-variant x 3-seed matrix are listed; the
+# engineering integration uses the seed 2026 representatives (a fixed
+# integration rule, not a model-selection result).
+#
+# Honest state: the val Macro-F1 numbers below come from the closeout
+# collect (val split, 4 capture groups) and are model-selection evidence
+# only. Nothing here proves a polarization benefit, independent
+# generalization, or real-time performance.
+
+experiment: material_runtime_v2_mask
+
+# --- Model A (fixed, explicitly named; never inferred from "latest") ---
+model_a:
+  path: runs/train/yolo26_formal_001/model_a/weights/best.pt
+  sha256: ba049784c8b2a0d90b72ed73f7deb91af327415ac9d1f33c8880f8537e845972
+  task: segment
+  architecture: yolo26n-seg
+  class_names: [target]
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  imgsz: 640
+  training_data: datasets/underwater_seg_binary_v2
+  # Model A's training data shares its capture sources with the classifier
+  # data (both derive from the same annotations); independence is NOT
+  # claimed and is recorded as unknown pending an explicit statement.
+  data_independence: unknown
+
+# --- Independent gray fallback (polar-invalid routing only) ---
+fallback:
+  path: runs/train/yolo26_formal_001/gray_fusion/best.pt
+  sha256: 0ca63f9e305eafdc1ff46632e53a9b6a40366b5a5241ada92502c0f7363d0862
+  identity: yolo26n-cls 4-class metal_submarine/plastic_submarine/plastic_fish/real_fish
+  role: independent_gray_fallback_for_polar_invalid_instances
+  # E1 gray is the pure control and never routes to this model.
+
+# --- The frozen 4-variant x 3-seed candidate matrix (no re-selection) ---
+candidates:
+  - {variant: gray,            seed: 2026, checkpoint: runs/train/cmx_v2_mask_gray_s2026/material_fusion/best.pt,            sha256: 7a15d63a9458c77c43ce5a6c3286d8f56d88979fefb4e41241d005500508991a}
+  - {variant: gray,            seed: 2027, checkpoint: runs/train/cmx_v2_mask_gray_s2027/material_fusion/best.pt,            sha256: 1795c4dbf1801998e32213a8d4360eef5d735e0c58462b9cd84c53e714013297}
+  - {variant: gray,            seed: 2028, checkpoint: runs/train/cmx_v2_mask_gray_s2028/material_fusion/best.pt,            sha256: 006a6fd9220134c8cf7db37ac66c8869a3d1cf4f0c0a56431bc2043a7fd3522f}
+  - {variant: gray_gray_valid, seed: 2026, checkpoint: runs/train/cmx_v2_mask_gray_gray_valid_s2026/material_fusion/best.pt, sha256: 2da960b37c6737abb0026d9af5d9775cb2f0f67ca9debcff16e84be3f14cd839}
+  - {variant: gray_gray_valid, seed: 2027, checkpoint: runs/train/cmx_v2_mask_gray_gray_valid_s2027/material_fusion/best.pt, sha256: 63f227c94c691a131e3a78136864adfb322ed520d90041801458cc306e9725cd}
+  - {variant: gray_gray_valid, seed: 2028, checkpoint: runs/train/cmx_v2_mask_gray_gray_valid_s2028/material_fusion/best.pt, sha256: 1f74936ce07ee44898660949d9b184718ad07e9b4a6d4624d076e9e9a949d580}
+  - {variant: gray_valid,      seed: 2026, checkpoint: runs/train/cmx_v2_mask_gray_valid_s2026/material_fusion/best.pt,      sha256: 2aacc332af255fcb26596cb8ab8f225d3434949ca293528e5a0bfa4f610a3e08}
+  - {variant: gray_valid,      seed: 2027, checkpoint: runs/train/cmx_v2_mask_gray_valid_s2027/material_fusion/best.pt,      sha256: 4d3a8654c48766029f3faf524ae162e5e631035a5c026abf564377681d361fb3}
+  - {variant: gray_valid,      seed: 2028, checkpoint: runs/train/cmx_v2_mask_gray_valid_s2028/material_fusion/best.pt,      sha256: f52ee3293e167f6f9aa879050a90c907b39b01e28c1364477a51d297deda56e5}
+  - {variant: gray_polar,      seed: 2026, checkpoint: runs/train/cmx_v2_mask_gray_polar_s2026/material_fusion/best.pt,      sha256: ba53c06b541c993105a22b6cc329caf4af6f720a63616f29b69f475eedec09b9}
+  - {variant: gray_polar,      seed: 2027, checkpoint: runs/train/cmx_v2_mask_gray_polar_s2027/material_fusion/best.pt,      sha256: 59730129c7823ce74b5c154064cf4890e5320b1fa196fca4d0c8b0759cf7eda5}
+  - {variant: gray_polar,      seed: 2028, checkpoint: runs/train/cmx_v2_mask_gray_polar_s2028/material_fusion/best.pt,      sha256: cf1aa49b2ee7aab90ded4a1fd1ad1c83148014a7b4f8d6d2f4090c73aad174af}
+
+engineering_seed: 2026
+
+# --- Material model input contract (identical to the v2_mask protocol) ---
+material_model:
+  imgsz: 224
+  crop_padding: 10
+  preprocessing_version: v4_band_224_area_linear_v1
+  pooling_mode: instance_mask
+  mask_schema: instance_mask_polygon_crop_v1
+  mask_resize_version: area_crop_to_imgsz_then_area_to_levels_v1
+  upstream_commit: e251d860aebc2f583a6c4919877e6bebe7f1aff3
+  input_modes:
+    gray: "appearance [G,G,G], single stream"
+    gray_gray_valid: "appearance [G,G,G], auxiliary [G,G,V]"
+    gray_valid: "appearance [G,G,G], auxiliary [0,0,V]"
+    gray_polar: "appearance [G,G,G], auxiliary [signed_q,abs_q,V]"
+  # G is the INTER_AREA-resized [0,1] gray crop; V the measurement-valid
+  # channel; instance_mask is area-resampled separately and never taken
+  # from polar_valid or from q. signed_q keeps its sign.
+
+# --- Calibration and rectification ---
+calibration:
+  file: datasets/bd_image/stereo_calib.npz
+  r_convention: matlab   # R_cv = R.T at the OpenCV boundary
+  baseline: 0.09890970798524992
+  focal_length: 3643.5231322766995
+  rectification:
+    enabled: true
+    # Raw stereo pairs are rectified online; playback of Rectified_v2 pairs
+    # passes already_rectified so they are never remapped twice.
+    already_rectified_frames: false
+
+# --- Stereo matching (must match the accepted V4/V5 generation settings) ---
+stereo:
+  matcher: sgbm
+  mode: 3way
+  scale: 0.25
+  max_disp: 768
+  block_size: 7
+  uniqueness_ratio: 10
+  speckle_window: 100
+  speckle_range: 32
+  texture_threshold: 10.0
+  lr_check_threshold_px: 2.0
+  min_valid_ratio: 0.05
+  band_margin: 20
+  full_image_threshold: 0.9
+
+# --- Polarization differential (V4/V5 generation formula, unchanged) ---
+polarization:
+  formula: "signed_q=(L-gain*warp(R))/(L+gain*warp(R)+epsilon); abs_q=|signed_q|"
+  gain: 1.0
+  gain_source: V4/V5 generation default (compute_polar_features right_gain=1.0)
+  epsilon: 1.0e-6
+  min_intensity_sum: 10.0
+  validity: "target & positive finite disparity & in-bounds & lr-consistent & L+gain*warp(R) >= min_intensity_sum"
+  # A polar array containing NaN/Inf is marked unavailable (non_finite_polar)
+  # and routed to the independent gray fallback; it is never silently
+  # replaced and reported as valid polarization.
+
+# --- Runtime execution ---
+runtime:
+  device: "0"
+  precision: float32
+  classification_batch: 8
+  fallback_strategy: route_polar_invalid_to_independent_gray
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+
+# --- Data identity: training state vs. runtime state are separate fields ---
+data_identity:
+  training_data_root: datasets/underwater_cls_fusion_v5_instance_mask
+  training_data_fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  training_parent_data_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+  # Runtime identity is filled per verification run for the data that
+  # actually flowed through the pipeline. It is reported alongside — never
+  # forced equal to, and never replacing, the training fingerprint.
+  runtime_data_root: ""
+  runtime_data_fingerprint: ""

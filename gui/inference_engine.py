@@ -23,6 +23,7 @@ and per-instance polarization quality.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -59,7 +60,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 DEFAULT_BASELINE_M = 0.09890970798524992
 DEFAULT_FOCAL_PX = 3643.5231322766995
 
-MODEL_B_INPUT_MODES = ("gray", "polar", "fusion")
+MODEL_B_INPUT_MODES = ("gray", "polar", "fusion", "material_fusion")
 
 STAGE_TIMING_KEYS = (
     "model_a_s",
@@ -110,6 +111,9 @@ class DetailedInferenceResult:
     fusion_inputs: list[FusionSampleInput | None] = dataclasses.field(
         default_factory=list
     )
+    frame_id: str = ""
+    material_inputs: list[Any] = dataclasses.field(default_factory=list)
+    material_results: list[Any] = dataclasses.field(default_factory=list)
 
 
 def resolve_device(requested: str = "auto") -> str:
@@ -245,6 +249,21 @@ class DualStageInferenceEngine:
                 # Fusion checkpoints carry imgsz and the quality-vector
                 # contract in their metadata; model_b_imgsz does not apply.
                 self.model_b = FusionClassifier(model_b_path, device=self.device)
+            elif input_mode == "material_fusion":
+                # The frozen CMX v2_mask candidates carry their own strict
+                # checkpoint contract, and a dual-stream variant additionally
+                # needs its independent gray fallback plus the identity
+                # checks that live in the material factory. A bare path here
+                # would silently produce a fallback-less adapter, so it is
+                # refused with a pointer to the supported entry point.
+                raise ValueError(
+                    "the material_fusion input mode cannot be built from "
+                    "model_b_path alone: the candidate identity, the "
+                    "config/checkpoint contract and the independent gray "
+                    "fallback are not known here. Use "
+                    "DualStageInferenceEngine.from_material_config(config_path, "
+                    "variant=..., seed=...) or inject a prepared model_b."
+                )
             else:
                 self.model_b = ClassificationModel(
                     model_path=model_b_path,
@@ -269,6 +288,16 @@ class DualStageInferenceEngine:
         path = Path(config_path) if config_path is not None else DEFAULT_CONFIG_PATH
         with open(path, "r", encoding="utf-8") as fh:
             cfg = yaml.safe_load(fh) or {}
+
+        if "model_b" not in cfg and (
+            "candidates" in cfg or "material_model" in cfg
+        ):
+            raise ValueError(
+                f"{path} is a material runtime experiment config, not the "
+                "default runtime config; it has no model_b.path. Use "
+                "DualStageInferenceEngine.from_material_config(config_path, "
+                "variant=..., seed=...) instead."
+            )
 
         def resolve(rel: str | Path) -> Path:
             candidate = Path(rel)
@@ -325,6 +354,147 @@ class DualStageInferenceEngine:
         kwargs.update(overrides)
         return cls(**kwargs)
 
+    @classmethod
+    def from_material_config(
+        cls,
+        config_path: str | Path,
+        *,
+        variant: str,
+        seed: int,
+        device: str | None = None,
+        model_a_factory: Any | None = None,
+    ) -> "DualStageInferenceEngine":
+        """Build the engine from the material runtime experiment config.
+
+        This is the supported entry point for the ``material_fusion`` input
+        mode, shared by the verifier and by later evaluation runs so no
+        caller has to assemble a slightly different pipeline by hand.
+
+        ``variant`` and ``seed`` are mandatory and must match exactly one
+        candidate; the selected checkpoint's file digest, its own metadata
+        and the config's declared contract (imgsz, class order,
+        preprocessing/mask/pooling versions, dataset identity) must all
+        agree, and Model A plus — for the dual-stream variants — the
+        independent gray fallback are digest-verified before anything is
+        loaded. The single-stream ``gray`` variant (E1) is the pure control
+        and binds no fallback.
+
+        Every value the config declares is passed to the engine: device,
+        Model A thresholds and imgsz, crop padding, calibration and
+        rectification, baseline/focal length, and the band/SGBM parameters.
+        Fixed values the engine does not expose as parameters are verified
+        against the engine's real behaviour and refused on a mismatch.
+        Relative paths resolve against the project root, never the cwd.
+        """
+        from models.material_classifier import (
+            build_material_classifier_for_candidate,
+            load_material_runtime_config,
+            resolve_project_path,
+            select_candidate,
+            verify_material_runtime_fixed_values,
+        )
+        from models.polar_fusion import torch_device_name
+
+        config = load_material_runtime_config(config_path)
+        fixed = verify_material_runtime_fixed_values(config)
+        candidate = select_candidate(config, variant=variant, seed=seed)
+
+        resolved_device = str(device) if device is not None else config.device
+        classifier = build_material_classifier_for_candidate(
+            config, candidate, device=resolved_device
+        )
+
+        model_a_path = resolve_project_path(config.model_a_path)
+        if not model_a_path.is_file():
+            raise FileNotFoundError(f"Model A not found: {model_a_path}")
+        model_a_digest = hashlib.sha256(model_a_path.read_bytes()).hexdigest()
+        if model_a_digest != config.model_a_sha256:
+            raise ValueError(
+                f"Model A sha256 mismatch: {model_a_path} is {model_a_digest}, "
+                f"the config records {config.model_a_sha256}"
+            )
+
+        torch_name = torch_device_name(resolved_device)
+        if model_a_factory is not None:
+            model_a = model_a_factory(
+                model_path=model_a_path,
+                in_channels=3,
+                device=torch_name,
+                conf_threshold=config.model_a_conf,
+                iou_threshold=config.model_a_iou,
+            )
+        else:
+            model_a = SegmentationModel(
+                model_path=model_a_path,
+                in_channels=3,
+                device=torch_name,
+                conf_threshold=config.model_a_conf,
+                iou_threshold=config.model_a_iou,
+            )
+
+        stereo_cfg = StereoMatcherConfig(
+            matcher=str(config.stereo.get("matcher", "sgbm")),
+            mode=str(config.stereo.get("mode", "3way")),
+            max_disparity=int(config.stereo.get("max_disp", 768)),
+            scale=float(config.stereo.get("scale", 0.25)),
+            block_size=int(config.stereo.get("block_size", 7)),
+            uniqueness_ratio=int(config.stereo.get("uniqueness_ratio", 10)),
+            speckle_window=int(config.stereo.get("speckle_window", 100)),
+            speckle_range=int(config.stereo.get("speckle_range", 32)),
+            texture_threshold=float(config.stereo.get("texture_threshold", 10.0)),
+            lr_check_threshold_px=float(
+                config.stereo.get("lr_check_threshold_px", 2.0)
+            ),
+            min_valid_ratio=float(config.stereo.get("min_valid_ratio", 0.05)),
+        )
+
+        rectifier = None
+        if config.rectify_enabled:
+            rectifier = StereoRectifier(
+                resolve_project_path(config.calibration_file),
+                r_convention=config.r_convention,
+                alpha=0.0,
+            )
+
+        engine = cls(
+            model_a=model_a,
+            model_b=classifier,
+            matcher=StereoMatcher(stereo_cfg),
+            rectifier=rectifier,
+            rectify_enabled=config.rectify_enabled,
+            device=resolved_device,
+            conf_threshold=config.model_a_conf,
+            model_a_iou_threshold=config.model_a_iou,
+            model_a_imgsz=config.model_a_imgsz,
+            stereo_config=stereo_cfg,
+            crop_padding=config.crop_padding,
+            band_vertical_margin=int(config.stereo.get("band_margin", 20)),
+            baseline=config.baseline,
+            focal_length=config.focal_length,
+            model_b_input_mode="material_fusion",
+        )
+        engine.material_selection = {
+            "config": str(config_path),
+            "variant": candidate.variant,
+            "seed": candidate.seed,
+            "checkpoint": str(resolve_project_path(candidate.checkpoint)),
+            "checkpoint_sha256": candidate.sha256,
+            "model_a": str(model_a_path),
+            "model_a_sha256": model_a_digest,
+            "fallback": (
+                str(resolve_project_path(config.fallback_path))
+                if classifier.fallback is not None else None
+            ),
+            "fallback_sha256": (
+                config.fallback_sha256 if classifier.fallback is not None else None
+            ),
+            "fallback_identity": classifier.fallback_identity,
+            "model_identity": classifier.model_identity,
+            "fixed_values": fixed,
+            "rectify_enabled": config.rectify_enabled,
+        }
+        return engine
+
     def process_frame(
         self,
         left: np.ndarray,
@@ -367,6 +537,7 @@ class DualStageInferenceEngine:
         right: np.ndarray,
         sync_skew_ms: float | None = None,
         already_rectified: bool = False,
+        frame_id: str = "",
     ) -> "DetailedInferenceResult":
         """Like :meth:`process_frame` but returns the full intermediate state.
 
@@ -393,6 +564,61 @@ class DualStageInferenceEngine:
             _gray_bgr_copy(left_gray), **_predict_kwargs(self.model_a_imgsz)
         )
         timings["model_a_s"] = time.perf_counter() - started
+        return self.process_instances_detailed(
+            left_gray,
+            right_gray,
+            instances,
+            sync_skew_ms=sync_skew_ms,
+            already_rectified=already_rectified,
+            frame_id=frame_id,
+            timings=timings,
+            frame_started=frame_started,
+        )
+
+    def process_instances_detailed(
+        self,
+        left_gray: np.ndarray,
+        right_gray: np.ndarray,
+        instances: list[Instance],
+        *,
+        sync_skew_ms: float | None = None,
+        already_rectified: bool = False,
+        frame_id: str = "",
+        timings: dict[str, float] | None = None,
+        frame_started: float | None = None,
+        crop_windows: dict[int, tuple[int, int, int, int]] | None = None,
+        gt_generation_contract: bool = False,
+    ) -> "DetailedInferenceResult":
+        """Run every post-detection stage over given instances.
+
+        The exact stages :meth:`process_frame_detailed` runs after Model A:
+        merged horizontal bands -> one band-restricted dense matching ->
+        robust per-instance depth -> per-pixel polarization -> Model B
+        classification. The GT-box evaluation path uses this entry with
+        annotated instances so the controlled condition runs the production
+        stage code, never an evaluation-only copy of it. ``left_gray`` and
+        ``right_gray`` must already be normalized (and rectified when
+        enabled); ``timings``/``frame_started`` let the caller keep Model A
+        inside the measured total.
+
+        ``crop_windows`` is a GT-only geometry override
+        (``instance_id -> (x1, y1, x2, y2)``): the annotated crop is defined
+        by the float polygon bounds, while the predicted path derives its
+        window from the detection bbox. It is never set by
+        :meth:`process_frame_detailed`, so the Model A path and every
+        existing caller keep their behaviour.
+
+        ``gt_generation_contract`` reproduces the V5 generation's rule for
+        an instance whose stereo statistics are invalid: the polar channels
+        *and* the whole quality vector are written as zeros. The live
+        engine instead reports the measured in-bounds/brightness ratios for
+        such an instance, so this is GT-only and is never enabled by
+        :meth:`process_frame_detailed`.
+        """
+        if timings is None:
+            timings = {}
+        if frame_started is None:
+            frame_started = time.perf_counter()
         if not instances:
             timings["total_s"] = time.perf_counter() - frame_started
             return DetailedInferenceResult(
@@ -404,6 +630,7 @@ class DualStageInferenceEngine:
                 sync_skew_ms=sync_skew_ms,
                 already_rectified=bool(already_rectified),
                 timings=timings,
+                frame_id=frame_id,
             )
 
         polar_map = np.zeros(left_gray.shape, dtype=np.float32)
@@ -418,13 +645,31 @@ class DualStageInferenceEngine:
                 for inst in instances
             ]
             fusion_inputs = [
-                self._instance_fusion_input(inst, left_gray, None, polar_invalid=True)
+                self._instance_fusion_input(
+                    inst, left_gray, None, polar_invalid=True,
+                    crop_window=_gt_crop_window(crop_windows, inst.id),
+                )
                 for inst in instances
             ]
+            material_inputs = None
+            material_results: list[Any] = []
+            if self.model_b_input_mode == "material_fusion":
+                material_inputs = [
+                    self._instance_material_input(
+                        inst,
+                        left_gray,
+                        None,
+                        polar_invalid=True,
+                        invalid_reason="sync_skew_exceeded",
+                        frame_id=frame_id,
+                        crop_window=_gt_crop_window(crop_windows, inst.id),
+                    )
+                    for inst in instances
+                ]
             if self.model_b is not None:
                 started = time.perf_counter()
-                instances = self._classify(
-                    instances, left_gray, polar_map, fusion_inputs
+                instances, material_results = self._classify(
+                    instances, left_gray, polar_map, fusion_inputs, material_inputs
                 )
                 timings["model_b_s"] = time.perf_counter() - started
             timings["total_s"] = time.perf_counter() - frame_started
@@ -439,6 +684,9 @@ class DualStageInferenceEngine:
                 timings=timings,
                 polar_quality=polar_quality,
                 fusion_inputs=fusion_inputs,
+                frame_id=frame_id,
+                material_inputs=material_inputs or [],
+                material_results=material_results,
             )
 
         # One band-restricted dense computation per frame; every instance
@@ -520,13 +768,35 @@ class DualStageInferenceEngine:
                 left_gray,
                 polar_result,
                 polar_invalid=not stats_by_id[inst.id].valid,
+                crop_window=_gt_crop_window(crop_windows, inst.id),
             )
             for inst in instances
         ]
 
+        material_inputs = None
+        material_results: list[Any] = []
+        if self.model_b_input_mode == "material_fusion":
+            material_inputs = [
+                self._instance_material_input(
+                    inst,
+                    left_gray,
+                    polar_result,
+                    polar_invalid=not stats_by_id[inst.id].valid,
+                    invalid_reason=stats_by_id[inst.id].reason
+                    if not stats_by_id[inst.id].valid
+                    else "",
+                    frame_id=frame_id,
+                    crop_window=_gt_crop_window(crop_windows, inst.id),
+                    zero_polar_when_invalid=gt_generation_contract,
+                )
+                for inst in instances
+            ]
+
         if self.model_b is not None:
             started = time.perf_counter()
-            instances = self._classify(instances, left_gray, polar_map, fusion_inputs)
+            instances, material_results = self._classify(
+                instances, left_gray, polar_map, fusion_inputs, material_inputs
+            )
             timings["model_b_s"] = time.perf_counter() - started
 
         timings["total_s"] = time.perf_counter() - frame_started
@@ -542,6 +812,9 @@ class DualStageInferenceEngine:
             polar_quality=polar_quality,
             polar_result=polar_result,
             fusion_inputs=fusion_inputs,
+            frame_id=frame_id,
+            material_inputs=material_inputs or [],
+            material_results=material_results,
         )
 
     def _classify(
@@ -550,18 +823,30 @@ class DualStageInferenceEngine:
         left_gray: np.ndarray,
         polar_map: np.ndarray,
         fusion_inputs: list[FusionSampleInput | None] | None = None,
-    ) -> list[Instance]:
+        material_inputs: list[Any] | None = None,
+    ) -> tuple[list[Instance], list[Any]]:
         """Run Model B for material classification.
 
         ``fusion`` mode classifies the per-instance fusion inputs built by
-        :meth:`_instance_fusion_input`; ``polar`` mode classifies
-        [gray, polar, gray]; ``gray`` mode classifies [gray, gray, gray].
-        Crop geometry is identical in all modes. When the injected Model B
-        exposes ``predict_batch`` all crops are classified in one call;
-        otherwise the legacy per-crop interface is used.
+        :meth:`_instance_fusion_input`; ``material_fusion`` mode classifies
+        the per-instance material inputs built by
+        :meth:`_instance_material_input` (predicted masks, explicit routing);
+        ``polar`` mode classifies [gray, polar, gray]; ``gray`` mode
+        classifies [gray, gray, gray]. Crop geometry is identical in all
+        modes. When the injected Model B exposes ``predict_batch`` all crops
+        are classified in one call; otherwise the legacy per-crop interface
+        is used.
+
+        Returns ``(instances, material_results)``; ``material_results`` is
+        empty in every legacy mode.
         """
+        if self.model_b_input_mode == "material_fusion":
+            updated, results = self._classify_material(
+                instances, material_inputs or []
+            )
+            return updated, results
         if self.model_b_input_mode == "fusion":
-            return self._classify_fusion(instances, fusion_inputs or [])
+            return self._classify_fusion(instances, fusion_inputs or []), []
 
         height, width = left_gray.shape
         crops: list[np.ndarray | None] = []
@@ -581,7 +866,7 @@ class DualStageInferenceEngine:
                 crops.append(build_polar_yolo_image(crop_gray, crop_polar))
 
         if not any(crop is not None for crop in crops):
-            return list(instances)
+            return list(instances), []
 
         batchable = [crop for crop in crops if crop is not None]
         if hasattr(self.model_b, "predict_batch"):
@@ -598,7 +883,132 @@ class DualStageInferenceEngine:
                 inst.class_name = result.top1_name or f"class_{inst.class_id}"
                 inst.confidence = round(float(result.top1_conf), 3)
             updated.append(inst)
-        return updated
+        return updated, []
+
+    def _classify_material(
+        self,
+        instances: list[Instance],
+        material_inputs: list[Any],
+    ) -> tuple[list[Instance], list[Any]]:
+        """Run the material-fusion classifier over the per-instance inputs.
+
+        The classifier returns one result per input; the count and the
+        stable per-instance identity are checked explicitly before any
+        result is scattered back, so a misaligned batch can never silently
+        relabel another instance.
+        """
+        if len(material_inputs) != len(instances):
+            raise ValueError(
+                f"material inputs ({len(material_inputs)}) do not match the "
+                f"instances ({len(instances)}); refusing to classify"
+            )
+        if not any(sample is not None for sample in material_inputs):
+            return list(instances), []
+        results = self.model_b.predict_batch(material_inputs)
+        if len(results) != len(instances):
+            raise ValueError(
+                f"classification returned {len(results)} results for "
+                f"{len(instances)} instances; refusing a silent zip truncation"
+            )
+        updated = []
+        for inst, sample, result in zip(instances, material_inputs, results):
+            if result.instance_id >= 0 and sample is not None:
+                if result.instance_id != inst.id:
+                    raise ValueError(
+                        f"result for instance {result.instance_id} was scattered "
+                        f"to instance {inst.id}; refusing a misaligned batch"
+                    )
+            if result.valid:
+                inst.class_id = int(result.class_id)
+                inst.class_name = result.class_name or f"class_{result.class_id}"
+                inst.confidence = round(float(result.confidence), 3)
+            updated.append(inst)
+        return updated, list(results)
+
+    def _instance_material_input(
+        self,
+        inst: Instance,
+        left_gray: np.ndarray,
+        polar_result: PolarFeatureResult | None,
+        polar_invalid: bool,
+        invalid_reason: str = "",
+        frame_id: str = "",
+        crop_window: tuple[int, int, int, int] | None = None,
+        zero_polar_when_invalid: bool = False,
+    ):
+        """Build the material-fusion model's input record for one instance.
+
+        The instance mask is the *predicted* Model A mask cropped to the
+        same padded window, binarized and labelled
+        ``predicted_instance_mask`` — it never comes from annotations in the
+        live path. A polar result with non-finite values is marked polar
+        unavailable (with an explicit reason) instead of being silently
+        replaced and reported as valid polarization.
+        """
+        from models.material_classifier import (
+            REASON_NON_FINITE_POLAR,
+            MASK_SOURCE_PREDICTED,
+            MaterialInstanceInput,
+        )
+
+        height, width = left_gray.shape
+        if crop_window is None:
+            y1p, y2p, x1p, x2p = _crop_window(
+                inst.bbox, height, width, self.crop_padding
+            )
+        else:
+            x1p, y1p, x2p, y2p = crop_window
+        crop_gray = left_gray[y1p:y2p, x1p:x2p]
+        if crop_gray.size == 0:
+            return None
+        mask_crop = (np.asarray(inst.mask)[y1p:y2p, x1p:x2p] > 0).astype(np.uint8)
+        if polar_result is None:
+            crop_signed = np.zeros(crop_gray.shape, dtype=np.float32)
+            crop_abs = np.zeros(crop_gray.shape, dtype=np.float32)
+            crop_valid = np.zeros(crop_gray.shape, dtype=np.uint8)
+            quality = np.zeros(QUALITY_VECTOR_LENGTH, dtype=np.float32)
+        else:
+            crop_signed = polar_result.signed_q[y1p:y2p, x1p:x2p]
+            crop_abs = polar_result.abs_q[y1p:y2p, x1p:x2p]
+            crop_valid = polar_result.valid_mask[y1p:y2p, x1p:x2p]
+            quality, _ = quality_vector_from_result(polar_result, inst.mask)
+            # The frame-level polar result is computed over the union of all
+            # instance masks; restrict the polar crops to this instance's
+            # mask exactly as the offline per-instance samples were built.
+            inside = mask_crop > 0
+            crop_signed = crop_signed * inside
+            crop_abs = crop_abs * inside
+            crop_valid = (crop_valid & inside).astype(np.uint8)
+
+        if not bool(np.isfinite(crop_signed).all()) or not bool(
+            np.isfinite(crop_abs).all()
+        ):
+            polar_invalid = True
+            invalid_reason = REASON_NON_FINITE_POLAR
+
+        if zero_polar_when_invalid and polar_invalid:
+            # The generation contract (GT evaluation only): an instance
+            # without valid stereo statistics carries zeros in the polar
+            # channels and in the whole quality vector.
+            crop_signed = np.zeros(crop_gray.shape, dtype=np.float32)
+            crop_abs = np.zeros(crop_gray.shape, dtype=np.float32)
+            crop_valid = np.zeros(crop_gray.shape, dtype=np.uint8)
+            quality = np.zeros(QUALITY_VECTOR_LENGTH, dtype=np.float32)
+
+        return MaterialInstanceInput(
+            frame_id=frame_id,
+            instance_id=inst.id,
+            bbox=inst.bbox,
+            gray=crop_gray,
+            signed_q=crop_signed.astype(np.float32),
+            abs_q=crop_abs.astype(np.float32),
+            polar_valid=crop_valid,
+            instance_mask=mask_crop,
+            quality=quality,
+            polar_invalid=bool(polar_invalid),
+            invalid_reason=invalid_reason,
+            mask_source=MASK_SOURCE_PREDICTED,
+        )
 
     def _classify_fusion(
         self,
@@ -624,6 +1034,7 @@ class DualStageInferenceEngine:
         left_gray: np.ndarray,
         polar_result: PolarFeatureResult | None,
         polar_invalid: bool,
+        crop_window: tuple[int, int, int, int] | None = None,
     ) -> FusionSampleInput | None:
         """Build the fusion model's input record for one instance.
 
@@ -634,9 +1045,12 @@ class DualStageInferenceEngine:
         is marked invalid.
         """
         height, width = left_gray.shape
-        y1p, y2p, x1p, x2p = _crop_window(
-            inst.bbox, height, width, self.crop_padding
-        )
+        if crop_window is None:
+            y1p, y2p, x1p, x2p = _crop_window(
+                inst.bbox, height, width, self.crop_padding
+            )
+        else:
+            x1p, y1p, x2p, y2p = crop_window
         crop_gray = left_gray[y1p:y2p, x1p:x2p]
         if crop_gray.size == 0:
             return None
@@ -672,6 +1086,15 @@ class DualStageInferenceEngine:
 def _gray_bgr_copy(gray: np.ndarray) -> np.ndarray:
     """3-channel copy of a grayscale image: Model A's standard input."""
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
+def _gt_crop_window(
+    crop_windows: dict[int, tuple[int, int, int, int]] | None, instance_id: int
+) -> tuple[int, int, int, int] | None:
+    """The GT-only crop override for one instance, when one was supplied."""
+    if not crop_windows:
+        return None
+    return crop_windows.get(instance_id)
 
 
 def _crop_window(bbox, height: int, width: int, padding: int) -> tuple[int, int, int, int]:

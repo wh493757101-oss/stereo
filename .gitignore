@@ -3,6 +3,25 @@ datasets/
 /runs/
 # Local evaluation and diagnostic reports for this training run
 /analysis/runs/yolo26_formal_001/
+# Material fusion (CMX) experiment: downloaded pretrained weights and
+# generated evaluation/verification reports
+/weights/
+/analysis/runs/cmx_*/
+/analysis/runs/material_fusion_*/
+/analysis/runs/material_experiments/
+# v2 (instance-mask) protocol: orchestrator plan/preflight/run manifests and
+# collect reports, plus the per-sample prediction dumps they write
+/analysis/runs/material_experiments_v2_mask/
+/analysis/runs/material_shuffle_*/
+/analysis/runs/material_bias_*/
+# Instance-mask (A1) diagnostics and bounded smoke reports
+/analysis/runs/material_mask_v5/
+# A1 acceptance-round reports
+/analysis/runs/material_mask_a1_fix_*/
+# 4A material runtime integration evidence (bounded verification reports)
+/analysis/runs/material_runtime_v2_mask/
+# Guard-round validation logs (retained for review, never committed)
+/analysis/runs/material_guard_fix_*/
 archives/*.zip
 *.pt
 *.pth
@@ -24,6 +43,7 @@ venv/
 
 # Test scratch space
 tests/_tmp*/
+.test_artifacts/
 
 # Local agent runtime state
 .claude/

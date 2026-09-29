@@ -305,13 +305,33 @@ def load_fusion_sample(path: str | Path) -> FusionSampleArrays:
         missing = [field for field in NPZ_FIELDS if field not in data.files]
         if missing:
             raise ValueError(f"{path} is missing fields: {', '.join(missing)}")
-        gray = data["gray"]
-        signed_q = data["signed_q"]
-        abs_q = data["abs_q"]
-        valid = data["valid"]
-        quality = data["quality"]
-        class_id = data["class_id"]
+        return validate_fusion_arrays(
+            path,
+            gray=data["gray"],
+            signed_q=data["signed_q"],
+            abs_q=data["abs_q"],
+            valid=data["valid"],
+            quality=data["quality"],
+            class_id=data["class_id"],
+        )
 
+
+def validate_fusion_arrays(
+    path: str | Path,
+    *,
+    gray: np.ndarray,
+    signed_q: np.ndarray,
+    abs_q: np.ndarray,
+    valid: np.ndarray,
+    quality: np.ndarray,
+    class_id: np.ndarray,
+) -> FusionSampleArrays:
+    """The V4 array contract, applied to already-decoded arrays.
+
+    Shared by :func:`load_fusion_sample` and the V5 mask loader so both
+    datasets hold the six original fields to exactly the same rules.
+    """
+    path = Path(path)
     if gray.dtype != np.uint8:
         raise ValueError(f"{path}: gray dtype {gray.dtype} != uint8")
     for name, arr, dtype in (

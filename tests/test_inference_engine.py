@@ -751,6 +751,39 @@ runtime:
         engine = DualStageInferenceEngine.from_config(config, crop_padding=5)
         assert engine.crop_padding == 5
 
+    def test_from_config_on_a_material_experiment_config_names_the_factory(
+        self, tmp_path
+    ):
+        """The material runtime config has no `model_b.path`.
+
+        Reading it with the legacy `from_config` must not raise a bare
+        KeyError; it must point at the material factory entry point.
+        """
+        config = tmp_path / "material_runtime.yaml"
+        config.write_text(
+            "experiment: material_runtime_v2_mask\n"
+            "model_a:\n  path: runs/train/model_a/weights/best.pt\n"
+            "candidates: []\n"
+            "material_model:\n  imgsz: 224\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="from_material_config"):
+            DualStageInferenceEngine.from_config(config)
+
+    def test_material_input_mode_with_a_bare_path_is_refused(self):
+        """A dual-stream adapter must never be built without its fallback.
+
+        The refusal happens before any checkpoint is read, so a path that
+        does not exist is enough to prove the guard fires first.
+        """
+        with pytest.raises(ValueError, match="from_material_config"):
+            DualStageInferenceEngine(
+                model_a=FakeSegmenter(instances=[]),
+                model_b_path=ROOT / "runs/train/never_loaded/material_fusion/best.pt",
+                device="cpu",
+                model_b_input_mode="material_fusion",
+            )
+
     def test_input_mode_defaults_to_polar_when_absent(
         self, tmp_path, calib_npz, fake_model_classes
     ):

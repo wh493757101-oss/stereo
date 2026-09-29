@@ -1,0 +1,54 @@
+# CMX material-fusion experiment v1 (configs/experiments/material_fusion_v1.yaml)
+#
+# First-round protocol for the CMX MiT-B0 multi-scale material-fusion
+# classifier on the V4 band-matched fusion dataset. No augmentation, no
+# class weighting, no auxiliary loss, no scheduler: one fixed
+# learning-rate scheme, warmup epochs with the pretrained encoder frozen,
+# then the encoder opens at the lower encoder_lr.
+#
+# Smoke runs override explicitly on the command line:
+#   --batch 8 --accum 2 --epochs 2 --warmup-epochs 1 --limit-batches 3
+# The effective batch (batch * accum_steps) is the protocol constant and
+# is identical for every variant and for smoke/formal runs.
+
+experiment: material_fusion_v1
+
+# E1 gray / E2 gray_gray_valid / E3 gray_valid / E4 gray_polar (main candidate).
+variant: gray_polar
+
+data: datasets/underwater_cls_fusion_v4_band
+# Expected dataset fingerprint (core.fusion_dataset.dataset_fingerprint);
+# training refuses when the audited dataset state does not match.
+data_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+
+# Official MiT-B0 ImageNet-1K backbone (nvidia/mit-b0), verified SHA256.
+pretrained: weights/pretrained/mit_b0.pth
+pretrained_sha256: 4af8348c2a802bf76115d34797ff5ce1d9f110bb8593c22d9b66d8bd7fa227fc
+
+# CMX upstream pin (huaaaliu/RGBX_Semantic_Segmentation).
+upstream_commit: e251d860aebc2f583a6c4919877e6bebe7f1aff3
+preprocessing_version: v4_band_224_area_linear_v1
+
+imgsz: 224
+batch: 8
+accum_steps: 2
+effective_batch: 16
+
+epochs: 30
+warmup_epochs: 2
+
+optimizer: adamw
+weight_decay: 0.01
+lr: 0.0001
+encoder_lr: 0.00001
+
+seed: 2026
+workers: 0
+
+# Independent historical gray Model B for polar-invalid fallback routing
+# (identity-verified at evaluation time; never auto-substituted).
+fallback_weights: runs/train/yolo26_formal_001/gray_fusion/best.pt
+fallback_identity: yolo26n-cls 4-class metal_submarine/plastic_submarine/plastic_fish/real_fish
+
+smoke: false
+limit_batches: 0

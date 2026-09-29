@@ -74,6 +74,34 @@ should stop and report the conflict instead of silently redesigning the task.
   user explicitly requests that operation.
 - Keep implementation and validation focused on the current project.
 
+## Test temporary artifacts and cleanup
+
+- Store disposable test artifacts under the project-local
+  `D:\Python\Project\my_data\.test_artifacts\` directory, not the C-drive
+  system temporary directory. Use a unique subdirectory for each task/run.
+- Before launching test processes, set their process-scoped `TEMP` and `TMP`
+  to that run's temporary directory. Set pytest `--basetemp` to a separate,
+  unique child directory for each invocation. This also covers Python
+  `tempfile` users; changing `--basetemp` alone is insufficient. Do not change
+  user-wide or system-wide environment settings.
+- Ensure `.test_artifacts/` is ignored by Git before generating artifacts;
+  never commit test scratch data, synthetic weights, or temporary snapshots.
+- On both success and failure, record the necessary results and diagnostics,
+  then remove the current run's disposable artifacts and confirm cleanup.
+  Use `try/finally` or equivalent. If interrupted or cleanup fails, report
+  the exact remaining paths and clean them up when execution resumes.
+- Before recursive cleanup, resolve and verify that every target is strictly
+  within the current run's `.test_artifacts/` subdirectory. Never delete the
+  project root, the entire `.test_artifacts/` tree, another run's files, or
+  targets reached through links outside the intended directory.
+- Formal datasets, training checkpoints, retained smoke/acceptance evidence,
+  and reports needed for review are not disposable test artifacts and must
+  not be removed by this cleanup. Preserve required results outside scratch
+  storage before cleaning up.
+- Include these storage, environment, cleanup, and cleanup-report requirements
+  in every Claude Code prompt that involves tests. These rules do not grant
+  Codex additional execution or file-modification authority.
+
 ## Review after manual execution
 
 When the user brings back Claude Code's result, Codex remains responsible for
