@@ -1,0 +1,100 @@
+# material_polar_local_interior_band_v1 — 局部偏振统计验证（方案 A，预注册）
+#
+# 方案选择（预先写入，未看任何外层结果后调整）：
+#   从 2A 已有诊断中只选用方案 A"实例内部与边界分别统计"：
+#   - interior = erode3x3_instance_mask_v1、band = instance_mask_minus_interior_v1
+#     均为 2B/2A 批在任何残差结果之前冻结的定义，本批原样复用；
+#   - 已有测量证据支持内/边界二分（band 有效率 0.582 vs interior 0.761，
+#     mean|q| 0.126 vs 0.084，重 |q| 像素在 band 过代表 9.4% vs 4.3%）；
+#   - 方案 B（未饱和亮区 vs 中等亮度）需要新设亮度阈值——不存在任何冻结
+#     定义，且诊断显示饱和像素仅 ~1.5%、退化像素近零，B 的分区间几乎退化，
+#     无预注册依据。故不实施 B，也不做任何特征组合搜索。
+#
+# 与被否决的 interior_erode3x3_fallback_original_v1 的区别：
+#   本方案不改变区域可靠性规则——原测量区域 instance_mask & polar_valid
+#   被"划分"为 interior/band 两块（不排除任何像素），s_valid 与全局定义
+#   构造性相同；被否决的是"只用 interior 计算统计并回退"的可靠性规则。
+#
+# 冻结不变量（与 material_polar_residual_v1 完全一致）：
+#   - 三折成员/角色、G、每折 P0（头+scaler）、训练预算、修正幅度、损失；
+#   - 残差形式：delta = valid_s * 0.5 * tanh(W x)，W 零初始化无 bias；
+#   - 唯一变化：残差输入从 14 维（C6+S8）变为 30 维（C14+S16），
+#     S = interior 8 项 + band 8 项（同一 8 项统计定义，逐块计算）；
+#     C = 原 6 项 + 每块 coverage/empty_flag/gray_mean/gray_std。
+#   - 标准化：每折仅用 inner_train（C 全部行、S 按单元格有效性），
+#     不再断言与冻结 P0 scaler 段相等（特征已不同，P0 本身不受影响，
+#     其 logits 经冻结 scaler 与冻结头由全局缓存只读计算）。
+
+experiment: material_polar_local_interior_band_v1
+
+protocol_source:
+  path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+  sha256_recorded: 0de5cf8a6d373eaea441488e2d787345cb6d5c34cab225d3e5aed7114b1cf36b
+
+# 全局缓存：P0 基线链与 G 的来源（只读；G 逐字节复制进本地缓存）
+features_source:
+  path: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/upgrade/corrected_features
+
+p0_baseline_source:
+  fit_dir: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit
+  verification: analysis/runs/material_existing_data_v1/20261008T140000Z_a9b8c7/baseline_v3/p0_baseline_verification.json
+
+# 独立本地特征缓存（scripts/prepare_material_local_features.py 生成，
+# 不覆盖前序版本；构建前先执行 V5 完整准入）
+local_features_source:
+  path: analysis/runs/material_polar_residual_v1/polar_local_20261009T013057Z_ec28494d/cache_build/local_features
+
+data:
+  root: datasets/underwater_cls_fusion_v5_instance_mask
+  fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+  dev_pool_splits: [train, val]
+  excluded_splits: [test]
+  parent_v4_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+
+# 旧全局统计版本（用户已审查的第 1 批拟合）——仅作同协议参照，不混用
+old_global_reference:
+  fit_summary: analysis/runs/material_polar_residual_v1/manual_20261008T221522/fit/summary.json
+
+training:
+  device: cpu
+  full_batch: true
+  epochs: 200
+  optimizer: adamw
+  lr: 0.01
+  weight_decay: 0.001
+  aux_loss_weight: 0.01
+  seed: 2026
+  epoch0_candidate: true
+  selection:
+    primary: inner_val_macro_f1
+    secondary: inner_val_accuracy
+    tie_break: earlier_epoch
+  refit_on_full_data: false
+
+variants:
+  R0: "P0 原样（对照）"
+  RC: "P0 + C_local 修正（偏振槽输入置零；区域质量信息可用）"
+  RCS: "P0 + C_local、S_local 修正（interior/band 两块实际偏振统计）"
+
+shuffle_diagnostic:
+  seeds: [2026, 2027, 2028, 2029, 2030]
+  scope: "v2 修正：复合分箱 = original_bin*4 + interior_valid*2 + band_valid；同 split、同原 bin、同有效模式内无固定点双射（冻结种子）；完整标准化 S16 来自同一 donor；空块保持显式零；C/P0/缺失状态不变"
+  correction_note: "v1 的行级双射+逐块守卫不能保证各区域内容仍是双射（两行可继承同一 donor 块而另一 donor 块弃用）；v2 改为复合分箱双射，覆盖率可能降低，按区域如实报告，未打乱样本不得作为偏振不敏感证据"
+  interpretation: "打乱下降不得单独解释为材质因果贡献"
+
+# 预先冻结的工程推进门槛（对本地变体；不是显著性检验）
+acceptance_thresholds:
+  1: "RCS_local 三折平均 Macro-F1 同时高于 R0 与 RC_local"
+  2: "至少两折相对两种对照均不下降"
+  3: "最差折相对任一对照 Macro-F1 下降不超过 1 个百分点"
+  4: "合并外层预测相对两种对照均净改对（fixed > broke）"
+  5: "各类合并召回相对任一对照下降不超过 1 个百分点"
+  6: "至少两个采集组出现相对 R0 的净改对，并报告收益集中程度"
+  attribution: "区域/灰度信息增益 = RC_local − R0；额外偏振增益 = RCS_local − RC_local；两者分列，不得混并"
+  reference_note: "旧全局版本数字仅作参照；不同特征版本之间不设门槛、不择优"
+
+guards:
+  refuse_fit_without_explicit_mode: true
+  refuse_existing_output_dir: true
+  no_training_by_agent: "Agent 仅实现入口与测试；真实 fit 由用户手动执行"

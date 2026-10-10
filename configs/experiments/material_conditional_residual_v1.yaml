@@ -1,0 +1,102 @@
+# material_conditional_residual_v1 — P0 输出上下文的条件修正（方案 A 冻结特征之上）
+#
+# 问题：偏振修正是否需要灰度上下文？本批只实现一种小容量条件修正：
+#   上下文仅来自冻结 P0 自身的输出（4 个 softmax 值 + 最大/次大差），
+#   与冻结局部版本 C14/S16 拼接后经过
+#     Linear(input_dim, 8) -> SiLU -> Linear(8, 4, bias=False)
+#   末层零初始化（epoch 0 = 无修正），前层按每折拟合种子初始化。
+# 上下文是模型输出特征，不是校准概率；不做标准化。
+#
+# 其余全部冻结：三折、P0 及其 scaler（含身份校验）、局部特征定义
+# （local_partition_interior_band_v1，C14/S16）、200 epoch、CPU/full-batch、
+# AdamW lr=0.01、wd=0.001、CE+0.01*mean(delta²)、epoch0 候选、inner_val
+# 选模、缺失 S 精确回退、RC（S 槽置零）/RCS 对照、打乱 v2、六条门槛。
+# 无 GT 路由、不锁类别组、不解冻 P0、不做结构/超参搜索。
+#
+# 种子 2026/2027/2028：2 变体 × 3 折 × 3 种子 = 18 次小型拟合，全部报告，
+# 不挑最佳种子。多种子是重复拟合，不是独立采集样本，不宣称独立泛化。
+#
+# 停止条件（预注册）：若条件修正相对 RC（C-only）与 P0 仍无稳定净收益，
+# 明确建议停止本轮偏振模型扩张；不得自行进入更大网络或 joint 微调。
+
+experiment: material_conditional_residual_v1
+
+protocol_source:
+  path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+  sha256_recorded: 0de5cf8a6d373eaea441488e2d787345cb6d5c34cab225d3e5aed7114b1cf36b
+
+features_source:
+  path: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/upgrade/corrected_features
+
+p0_baseline_source:
+  fit_dir: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit
+  verification: analysis/runs/material_existing_data_v1/20261008T140000Z_a9b8c7/baseline_v3/p0_baseline_verification.json
+
+local_features_source:
+  path: analysis/runs/material_polar_residual_v1/polar_local_20261009T013057Z_ec28494d/cache_build/local_features
+
+data:
+  root: datasets/underwater_cls_fusion_v5_instance_mask
+  fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+  dev_pool_splits: [train, val]
+  excluded_splits: [test]
+  parent_v4_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+
+conditional_head:
+  hidden: 8
+  activation: silu
+  last_layer_zero_init: true
+  context:
+    softmax: true
+    top_margin: true
+    standardized: false
+    note: "模型输出特征，不是校准概率；只来自冻结 P0 的输出 logits"
+
+training:
+  device: cpu
+  full_batch: true
+  epochs: 200
+  optimizer: adamw
+  lr: 0.01
+  weight_decay: 0.001
+  aux_loss_weight: 0.01
+  epoch0_candidate: true
+  selection:
+    primary: inner_val_macro_f1
+    secondary: inner_val_accuracy
+    tie_break: earlier_epoch
+  refit_on_full_data: false
+
+seeds: [2026, 2027, 2028]
+
+variants:
+  R0: "P0 原样（对照；各种子相同）"
+  RC: "P0 + C + 上下文修正（偏振槽置零）"
+  RCS: "P0 + C + S + 上下文修正"
+
+linear_reference:
+  # 身份修复后的线性局部拟合（用户已完成）；绑定路径 + 预期摘要 SHA256
+  fit_summary: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/summary.json
+  expected_sha256: 22ff7a81d51a7cfe92658130f021fdf45e46e292e71d1bfa00a46020988fd5a4
+  note: "准入时核验 mode/status/experiment/region/协议/缓存定义/折/P0 oracle 身份；错误历史拟合 (manual_20261009T130447) 因身份与 SHA 不符被拒绝"
+
+shuffle_diagnostic:
+  seeds: [2026, 2027, 2028, 2029, 2030]
+  scope: "v2 复合分箱（original_bin*4 + interior_valid*2 + band_valid）；完整标准化 S16 来自同一 donor；上下文来自 P0、不受打乱影响"
+
+# 预先冻结的工程推进门槛（对三种子均值口径）
+acceptance_thresholds:
+  1: "RCS 三折平均（三种子均值）Macro-F1 同时高于 R0 与 RC"
+  2: "至少两折相对两种对照均不下降（三种子均值口径）"
+  3: "最差折相对任一对照下降不超过 1 个百分点"
+  4: "跨种子合计的外层预测相对两种对照均净改对"
+  5: "各类合并召回相对任一对照下降不超过 1 个百分点"
+  6: "至少两个采集组出现相对 R0 的净改对"
+  attribution: "RC−R0 = 上下文/控制信息增益；RCS−RC = 额外偏振增益；分列报告"
+  stop_condition: "若 RCS 相对 RC 与 R0 仍无稳定净收益 → 明确建议停止本轮偏振模型扩张（不进入更大网络或 joint 微调）"
+
+guards:
+  refuse_fit_without_explicit_mode: true
+  refuse_existing_output_dir: true
+  no_training_by_agent: "Agent 仅实现入口与测试；真实 fit 由用户手动执行"

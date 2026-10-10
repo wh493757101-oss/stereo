@@ -1,0 +1,225 @@
+# material_residual_runtime_v1 — the locked residual candidate under real
+# Model A predictions (integration + evaluation ONLY; no training, no
+# deployment, no re-selection).
+#
+# The candidate is the COMPLETED conditional-residual fit
+# material_conditional_residual_v1 (manual_20261009T185911): frozen MiT-B0
+# gray feature G, the frozen per-fold P0 linear head and the frozen
+# correction branch (Linear(35,8) -> SiLU -> Linear(8,4,bias=False)),
+# delta = valid_s * 0.5 * tanh(head(x)), missing-S -> exactly P0.
+# Every file the runtime loads is pinned by sha256 below; the loader
+# refuses any drift before anything runs.
+#
+# The engineering representative seed is 2026 — an integration rule fixed
+# BEFORE this config was written, not a model-selection result; Layer A
+# verifies all three seeds against the saved offline evidence.
+#
+# This candidate is NOT a CMX checkpoint and never enters the historical
+# CMX loader; models/material_residual_classifier.py is its own adapter.
+
+experiment: material_residual_runtime_v1
+
+candidate:
+  experiment: material_conditional_residual_v1
+  fit_dir: analysis/runs/material_conditional_residual_v1/manual_20261009T185911
+  summary_sha256: 9673f711488f0ac2ead0cc098ff669158594d9a526f01e3a5249f043e30233fa
+  admission_sha256: f2fe5bd5e6f22844b250db6da17fe317de4c0b8616ccb4ae669224559d38c8c2
+  input_dim: 35
+  context_dim: 5
+  hidden: 8
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+  engineering_seed: 2026
+  variants: [R0, RC, RCS]
+  fallback:
+    rule: "missing/invalid polarization falls back to the candidate's OWN frozen P0 (delta gated to exactly zero); an unusable gray crop is an explicit input failure, never a silent substitution"
+    reasons: [no_valid_s_region, non_finite_polar]
+
+protocol:
+  path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+  sha256: 0831dc29aca1e0e7244d36249a44b740a05f800238c3b2e54dc1a15e82bf8092
+  fold_rule: "each frame's capture group belongs to exactly one fold's outer_eval; that fold's models evaluate the frame — never a best fold, no ensemble, no full-data refit"
+
+encoder:
+  path: weights/pretrained/mit_b0.pth
+  sha256: 4af8348c2a802bf76115d34797ff5ce1d9f110bb8593c22d9b66d8bd7fa227fc
+  imgsz: 224
+  pooling: instance_mask weighted mean on the last stage (mask_level_weights)
+  preprocessing_version: v4_band_224_area_linear_v1
+
+features:
+  crop_padding: 10
+  region_rule: local_partition_interior_band_v1
+  global_feature_definition_version: existing_data_probe_v1
+  local_feature_definition_version: existing_data_probe_v1_local_interior_band_v1
+  global_cache:
+    path: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/upgrade/corrected_features
+    files:
+      cache_binding.json: c23fe408b677bea5b6c3493d26c1f5439fa9115cb2fc59fa28ce7ed770bed876
+      feature_cache.npz: c2fd11bd9d31d5bb0340c7a7ca72eb1d52169cfe1a606aca3f8ab037f54b5919
+      feature_definition.json: e312a1ca513179930e3005fa060456d268eb12b90294da27d57656e0f1046351
+      feature_manifest.json: 7e9dde718b1c19a599f9204c8eb0e85db500843ffbe6e801e0f2a6921a3136eb
+  local_cache:
+    path: analysis/runs/material_polar_residual_v1/polar_local_20261009T013057Z_ec28494d/cache_build/local_features
+    files:
+      cache_binding.json: 7f23498da5af05987fd9cd7fe8c825e980cfc8fdd9114e441b9e5d4a78560c3c
+      feature_cache.npz: 7b7e219eff7dbe57556d809d11416a0ec86261b487d4915e59173b88a1bf8d4c
+      feature_definition.json: 3b7f40bda3f17d8cb3b71fc71f9806dadd0b25dde3d6904d751fbb62042d58bc
+      feature_manifest.json: c2e38e794e5d4f8cda33439cd7260fe2059547d9a5830f029390cb5f2cdb7da0
+
+p0_models:
+  fold0:
+    checkpoint: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/model_state.pt, sha256: 3b5d0b6868bf97ac23f4e7354adf4b5fb8e8c9e7b51eae515e4dfbfbaa886694}
+    scaler: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/scaler.json, sha256: 701be249b3f1aabb5ae246c72ed843a94e8f3728b27e698393aa951aed438fdd}
+    oracle: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/outer_eval_predictions.jsonl, sha256: f0a6c789bff8a161ef60d9b56323fac120d5f80c5f08dcdd0bb0da3e6fd5cb26}
+  fold1:
+    checkpoint: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/model_state.pt, sha256: f72a5f7d74053b62be15c91f35fd36b73c09d1975938a124adfafeaa204c9955}
+    scaler: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/scaler.json, sha256: fbf3597bf44e650103ee190d970dc08626eb7ad16db2eb028999cc27873e5930}
+    oracle: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/outer_eval_predictions.jsonl, sha256: 61c30e270c245e11f7657cf9569825ab98c73138a379347b52e7bffe6afb8e9e}
+  fold2:
+    checkpoint: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/model_state.pt, sha256: 8abba262b21aaffe11ba9ce433748fb03387abdde23fa3e36222eeffbf6e8f2a}
+    scaler: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/scaler.json, sha256: 7011781806be21812d128a9fc8d39a0dbcd0215df0b7dc699c1d58cce7b50999}
+    oracle: {path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/outer_eval_predictions.jsonl, sha256: 11884c9e93c46d28efcc1c499afe51c499fb347ddce5fa6fa079ba8197e36505}
+
+residual_models:
+  # seed 2026: the engineering representative — full identity (Layer A + B)
+  # seeds 2027/2028: saved RCS outer predictions pinned for the Layer A
+  # all-seed cross-check (their heads are not loaded by the runtime)
+  seed_2026:
+    fold0:
+      RCS:
+        residual_state: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/residual_state.pt, sha256: 222fb0fa1502b56561a83d67249b3d9716f47854cbb0087bead17fd52beaeafc}
+        scaler: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/scaler.json, sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca}
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/outer_eval_predictions.jsonl, sha256: 04218070955a8c09123cf7eede0ac39b8fbface1f4374b954681e8e29ecf392a}
+        fold_variant_report: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/fold_variant_report.json, sha256: a9b7e9a51a8330414d7a0361ea426a6021ea5e81fdf6509ff4b46ab2d748acfc}
+      RC:
+        residual_state: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/residual_state.pt, sha256: c00d08ce87205789b1e0f88fa640c4408f513d8193620c2cea5a79264ac16c4a}
+        scaler: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/scaler.json, sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca}
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/outer_eval_predictions.jsonl, sha256: ca712ce486783976115c7cb876c4dd3ff521425dc132b08e6bdacf5f5f75de10}
+        fold_variant_report: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/fold_variant_report.json, sha256: 74766d6d105dbb8cbe56cb72df3f1a3c8fd6b0eaa3bbcf431dead6eb747ab006}
+    fold1:
+      RCS:
+        residual_state: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/residual_state.pt, sha256: 1a53171c8ccfb2a0f60ae5a1eaab09c46edb034b96e3e64be9678d487474608d}
+        scaler: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/scaler.json, sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d}
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/outer_eval_predictions.jsonl, sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0}
+        fold_variant_report: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/fold_variant_report.json, sha256: 1339d0fb4b2532a712ba6f3d88acc9f9c2785de4dda0135836b6025b232dcb12}
+      RC:
+        residual_state: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/residual_state.pt, sha256: 179ee8b50c24589858825e1bfa05504307477a39335fdb39c81509908384be49}
+        scaler: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/scaler.json, sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d}
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/outer_eval_predictions.jsonl, sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0}
+        fold_variant_report: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/fold_variant_report.json, sha256: 40beccf5eb7162abcac082c508e0d6cbf03eee7a72deadcbbfa1faf8c0f19ee9}
+    fold2:
+      RCS:
+        residual_state: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/residual_state.pt, sha256: 566f9c67659f10d38849fd736f53e008f2edad32934f2c2578b135672131b7fe}
+        scaler: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/scaler.json, sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35}
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/outer_eval_predictions.jsonl, sha256: 49d82b90d4db265cb7e6ebdb02b77e04482eb7c2ab8ca86179924091657692a6}
+        fold_variant_report: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/fold_variant_report.json, sha256: 6ed2d78b225175cedd0375c590a716c10ade27fbae99db9f6287edf9ecd9fdc8}
+      RC:
+        residual_state: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/residual_state.pt, sha256: 9e1bcb69c6736acb2a0361d4e1eb03253dbc5b623c5c73808dd902fddd33b2ef}
+        scaler: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/scaler.json, sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35}
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/outer_eval_predictions.jsonl, sha256: 627c43ed2cf3f447856c55ceadc454dc9ebe7e35e47c2be327497a95666f52ac}
+        fold_variant_report: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/fold_variant_report.json, sha256: b6a362c6a8b6afe472b9ecabeec48723a982a813c4e44677920cca13ed94ff32}
+  seed_2027:
+    fold0:
+      RCS:
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RCS/outer_eval_predictions.jsonl, sha256: afe5ae67cd253e342d35da31481bd1634610cecebf21d841f9a418ad0a9e122f}
+    fold1:
+      RCS:
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RCS/outer_eval_predictions.jsonl, sha256: 7f93572592d5cac1f9a161d7186aaf9825d8214d7965bcccf4f41532996398e0}
+    fold2:
+      RCS:
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RCS/outer_eval_predictions.jsonl, sha256: aa9a1d41d995157e85aef767e686765b747ccf2bc24b8f6fba474f85897fea42}
+  seed_2028:
+    fold0:
+      RCS:
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RCS/outer_eval_predictions.jsonl, sha256: 0373bd5f38fe5a6c64bf92aad8bbb2308e894f2af054773caa5d452ad1eed05a}
+    fold1:
+      RCS:
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RCS/outer_eval_predictions.jsonl, sha256: 47f5843de4e1601c6d5404a1254cbc005429a119ff3e82738dd001ff7a770e60}
+    fold2:
+      RCS:
+        outer_eval_predictions: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RCS/outer_eval_predictions.jsonl, sha256: eb123f4c80c13c86b6b3852a0b0493465b85778b41a0ab8a54ee0427e67efd8a}
+
+r0_records:
+  # the fit's own R0 outer predictions (the verified runtime P0)
+  fold0: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/R0/fold0_R0/outer_eval_predictions.jsonl, sha256: 0e6a9ccb0439f7346e8368f09c715e01d061067314f91f2c93577f313354869e}
+  fold1: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/R0/fold1_R0/outer_eval_predictions.jsonl, sha256: 85021a02d752aafd4bbb75695de84c63e03f9014219e1f21a7e05bb3d5c96c3f}
+  fold2: {path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/R0/fold2_R0/outer_eval_predictions.jsonl, sha256: 672456a33494b480e7cbb4f5db0963b1b4954b5643c4ba08121a5199d4b67f63}
+
+# --- Model A (fixed, explicitly named; identical to the v2_mask round) ---
+model_a:
+  path: runs/train/yolo26_formal_001/model_a/weights/best.pt
+  sha256: ba049784c8b2a0d90b72ed73f7deb91af327415ac9d1f33c8880f8537e845972
+  task: segment
+  architecture: yolo26n-seg
+  class_names: [target]
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  imgsz: 640
+  training_data: datasets/underwater_seg_binary_v2
+  # Model A's training data shares its capture sources with the classifier
+  # data; independence is NOT claimed and is recorded as unknown. Any
+  # conclusion from Layer B is therefore NOT an independent blind test.
+  data_independence: unknown
+
+calibration:
+  file: datasets/bd_image/stereo_calib.npz
+  r_convention: matlab
+  baseline: 0.09890970798524992
+  focal_length: 3643.5231322766995
+  rectification:
+    enabled: true
+    already_rectified_frames: false
+
+stereo:
+  matcher: sgbm
+  mode: 3way
+  scale: 0.25
+  max_disp: 768
+  block_size: 7
+  uniqueness_ratio: 10
+  speckle_window: 100
+  speckle_range: 32
+  texture_threshold: 10.0
+  lr_check_threshold_px: 2.0
+  min_valid_ratio: 0.05
+  band_margin: 20
+  full_image_threshold: 0.9
+
+polarization:
+  formula: "signed_q=(L-gain*warp(R))/(L+gain*warp(R)+epsilon); abs_q=|signed_q|"
+  gain: 1.0
+  epsilon: 1.0e-6
+  min_intensity_sum: 10.0
+
+runtime:
+  device: "0"
+  precision: float32
+  classification_batch: 8
+  head_device: cpu   # the P0/residual heads always run on CPU float32 (offline-identical)
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+
+data_identity:
+  training_data_root: datasets/underwater_cls_fusion_v5_instance_mask
+  training_data_fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  training_parent_data_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+  runtime_data_root: ""
+  runtime_data_fingerprint: ""
+
+# Stage-comparison tolerances, fixed BEFORE the evaluation ran. A stage
+# difference beyond its tolerance STOPS the formal quality statistics.
+tolerances:
+  g_feature_atol: 1.0e-4
+  g_feature_rtol: 1.0e-4
+  c_s_atol: 0.0        # C14/S16 recomputation must be exact (same numpy ops)
+  logit_atol: 1.0e-4   # rtol 0, mirrors the frozen P0 identity tolerance
+  prediction_rule: exact
+
+# The bounded timing round: everything frozen before any run.
+benchmark:
+  frame_count: 12
+  selection: "evenly spread unique val frames in sorted manifest order, frozen before any model output exists"
+  warmup_per_frame: 2
+  measured_per_frame: 5
+  budget_minutes: 15
+  scenario_targets: [0, 1, 2, 5]
+  note: "offline replay of preloaded already-rectified frames; NOT a camera-to-GUI claim; incomplete timing is reported PARTIAL and never extrapolated to 20-30 FPS"

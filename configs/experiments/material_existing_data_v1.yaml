@@ -1,0 +1,234 @@
+# material_existing_data_v1 — diagnostics and probe protocol on the EXISTING data
+#
+# Purpose: with the current data frozen (labels unchanged, no new captures,
+# training run manually by the user), this config pins the protocol for
+#
+#   1. a capture-group-isolated 3-outer-fold protocol over the old
+#      train+val pool (scripts/prepare_existing_data_protocol.py),
+#   2. a fixed 4-condition Model-A detection error attribution
+#      (scripts/diagnose_existing_detection.py),
+#   3. frozen-encoder feature extraction and polarization quality
+#      statistics for the P0/P1/P2 probe (scripts/prepare_material_probe.py),
+#   4. a linear 4-class probe training entry the USER runs manually
+#      (scripts/train_material_probe.py --fit).
+#
+# Honesty boundaries recorded up front (and re-stated in the docs):
+#   - The old val split took part in project development; the new fold
+#     protocol proves TRAINING-level group isolation only. It is not a new
+#     blind test and not an independent-capture generalization claim.
+#   - Historical diagnostics that use weights trained on the old train/
+#     val are not OOF evidence under this protocol.
+#   - Nothing in this round proves a polarization benefit.
+
+experiment: material_existing_data_v1
+
+# --- Data identity (existing mainline data; never modified) ---------------
+data:
+  root: datasets/underwater_cls_fusion_v5_instance_mask
+  # V5 fingerprint (core.material_mask_dataset.mask_dataset_fingerprint);
+  # admission re-runs the existing read-only V5 gate — no second fingerprint
+  # definition is introduced by this round.
+  fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  parent_v4_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+  mask_schema: instance_mask_polygon_crop_v1
+  mask_resize_version: area_crop_to_imgsz_then_area_to_levels_v1
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+
+  # Dev pool = the old train + val ONLY. The old test split is excluded from
+  # the dev pool and is never evaluated, never probed for features, never
+  # used for any numeric exploration in this round; it is only used to
+  # exclude members (its group names and sample names must not appear in the
+  # dev pool) and for the pre-existing source/integrity admission.
+  dev_pool_splits: [train, val]
+  excluded_splits: [test]
+
+  # Frame/label provenance for the detection side of the inventory.
+  split_assignment: datasets/underwater_seg_binary_v2/split_assignment.csv
+  label_root: datasets/underwater_seg_v2/labels
+  left_image_root: datasets/Rectified_v2   # recorded identity; images are read by the detection diagnosis only
+
+# --- Frozen baseline identities (paths pinned, never "latest") -----------
+# Every entry is SHA256-verified at protocol time; a missing or changed file
+# refuses the affected step instead of being re-resolved from disk.
+baselines:
+  model_a:
+    path: runs/train/yolo26_formal_001/model_a/weights/best.pt
+    sha256: ba049784c8b2a0d90b72ed73f7deb91af327415ac9d1f33c8880f8537e845972
+    task: segment
+    architecture: yolo26n-seg
+  e1_candidate:            # variant gray, engineering seed 2026 (fixed rule, not a selection result)
+    path: runs/train/cmx_v2_mask_gray_s2026/material_fusion/best.pt
+    sha256: 7a15d63a9458c77c43ce5a6c3286d8f56d88979fefb4e41241d005500508991a
+    variant: gray
+    seed: 2026
+  e4_candidate:            # variant gray_polar, engineering seed 2026
+    path: runs/train/cmx_v2_mask_gray_polar_s2026/material_fusion/best.pt
+    sha256: ba53c06b541c993105a22b6cc329caf4af6f720a63616f29b69f475eedec09b9
+    variant: gray_polar
+    seed: 2026
+  independent_gray_fallback:
+    path: runs/train/yolo26_formal_001/gray_fusion/best.pt
+    sha256: 0ca63f9e305eafdc1ff46632e53a9b6a40366b5a5241ada92502c0f7363d0862
+  official_mit_b0:
+    path: weights/pretrained/mit_b0.pth
+    sha256: 4af8348c2a802bf76115d34797ff5ce1d9f110bb8593c22d9b66d8bd7fa227fc
+
+  # Historical D0 evidence used to verify the detection reproduction.
+  # These counts are a baseline to RE-CHECK against, not numbers every new
+  # input must satisfy; the comparison reads the evidence file, it does not
+  # hardcode the counts.
+  historical_d0_evidence:
+    frames_jsonl: analysis/runs/material_runtime_v2_mask/4b_fix_20260928T114135Z/quality/frames.jsonl
+    summary_json: analysis/runs/material_runtime_v2_mask/4b_fix_20260928T114135Z/quality/summary.json
+    reference_candidate: gray_polar_s2026
+    reference_layer: layer_b.routed
+
+# --- Part 1: protocol / fold assignment ----------------------------------
+protocol:
+  n_outer_folds: 3
+  seed: 2026
+  # Deterministic greedy assignment of WHOLE capture groups; the objective
+  # balances per-class GT instance counts across folds (never model scores).
+  assignment_objective: class_instance_count_greedy
+  inner_val_fraction: 0.25   # of the outer-train groups, rounded up, >= 1
+  inner_seed_base: 2026      # inner split seed for fold i = base + i
+  # Validity requirements; violation => fold_assignment_status=BLOCKED (the
+  # fitting admission refuses; diagnostics that do not need the folds still run).
+  require_outer_eval_all_classes: true
+  require_inner_train_all_classes: true
+  require_inner_val_all_classes: false   # reported; degenerate selection is flagged, not blocked
+  # Group unit: the complete capture group. Every group in this dataset is
+  # one continuous 45-frame sequence (block_id is 0 everywhere); sequences
+  # are never split across folds or across inner parts.
+  # No source records physical-object identity, so cross-GROUP physical
+  # object relations are recorded as "unknown" and are NOT treated as
+  # confirmed leakage; scene-name similarity is not evidence.
+  treat_cross_group_object_relations: unconfirmed_unknown
+
+# --- Part 2A: detection diagnosis (frozen conditions, no grid search) ----
+detection:
+  split: val                 # the historical D0 baseline lives on the original val
+  # Fixed condition matrix. Everything else (precision, NMS IoU, mask
+  # recovery, matching) is the production path and is never varied here.
+  conditions:
+    D0: {imgsz: 640, conf: 0.25}
+    D1: {imgsz: 640, conf: 0.10}
+    D2: {imgsz: 640, conf: 0.05}
+    D3: {imgsz: 960, conf: 0.25}
+  nms_iou: 0.45              # passed as Ultralytics iou; actual behaviour reported from the runtime
+  match_iou_threshold: 0.50  # identical to scripts/eval_material_pipeline.IOU_THRESHOLD; never lowered
+  order: [D0, D1, D2, D3]    # D0 first; if the D0 reproduction fails, later conditions do not run
+  d0_reproduction: require   # require | report  (require = stop before D1..D3 on mismatch)
+  # Single-stage Model A timing (warmup + repeats, per condition, explicit
+  # sync). This is ONE stage, not the system FPS.
+  timing:
+    enabled: true
+    warmup: 5
+    repeats: 30
+  atlas:
+    matched_controls_per_class: 3
+    margin: 48               # px of context around the drawn boxes
+  max_runtime_minutes: 30    # GPU forward budget for the whole diagnosis
+
+# --- Part 2B: polarization quality statistics ----------------------------
+polar_quality:
+  # Frozen BEFORE any result is seen. Interior = single 3x3 erosion of the
+  # instance mask; contour band = instance mask minus interior (a 1-px band
+  # inside the annotated contour). Never redefined after looking at results.
+  interior_definition: erode3x3_instance_mask_v1
+  band_definition: instance_mask_minus_interior_v1
+  q_region: instance_mask_and_polar_valid   # S and the q statistics use instance_mask & valid only
+  brightness_definition: mean_gray_in_instance_mask_0_1
+  correlation: {pearson: true, spearman: true}
+  metadata_availability:
+    # No capture-side metadata files exist in this dataset; these are
+    # recorded explicitly as NOT_AVAILABLE (never invented, never zero).
+    exposure: NOT_AVAILABLE
+    gain: NOT_AVAILABLE
+    gamma: NOT_AVAILABLE
+    timestamp: NOT_AVAILABLE
+    sync_status: unknown     # CLAUDE.md invariant 7
+
+# --- Part 2B: frozen feature extraction ----------------------------------
+features:
+  imgsz: 224
+  crop_padding: 10
+  preprocessing_version: v4_band_224_area_linear_v1   # the existing [0,1] gray protocol; NOT changed this round
+  gray_input_mode: "gray replicated to [G,G,G] (the gray variant appearance branch)"
+  encoder: MiT-B0 official, last stage only, frozen
+  pooling: instance_mask weighted mean on the last stage (mask_level_weights semantics)
+  pooling_background_note: "mask pooling constrains the pooling operator only; the encoder is not claimed background-free"
+  feature_definition_version: existing_data_probe_v1
+  max_runtime_minutes: 30   # shared budget for the extraction batches (monotonic clock)
+  cache:
+    # Raw features only; NO standardization/PCA is fitted on the dev pool here.
+    store: raw
+  control_features:   # slot C (6 values) — the FIRST THREE quality entries only
+    - quality_valid_ratio
+    - quality_in_bounds_ratio
+    - quality_brightness_valid_ratio
+    - gray_mean_in_instance_mask
+    - gray_std_in_instance_mask
+    - s_region_nonempty_flag
+  polar_stats:        # slot S (8 values) on instance_mask & polar_valid of the ORIGINAL crop npz
+    - signed_q_mean
+    - signed_q_std_ddof0
+    - signed_q_p10
+    - signed_q_p25
+    - signed_q_p50
+    - signed_q_p75
+    - signed_q_p90
+    - abs_q_mean
+  quantile_method: "numpy.percentile (linear interpolation), computed on instance_mask & polar_valid"
+  missing_rule: "no valid pixel => explicit has_valid_s=false; S stored as NaN in the npz cache, null in JSON; never read as a real zero measurement"
+  leakage_rules:
+    - "quality[3] (mean_abs_q) is polarization content and may only enter S; S is computed from the signed_q/abs_q arrays, never from the quality vector"
+    - "P1 reads quality[0:3] and the gray/flag control features only; perturbing mean_abs_q/signed_q/abs_q must not change P1"
+    - "instance_mask is never taken from valid or from q!=0 positions"
+
+# --- Part 3: linear probe training contract (user-run) --------------------
+probe:
+  variants:
+    P0: {slots: [G]}
+    P1: {slots: [G, C]}
+    P2: {slots: [G, C, S]}
+  head: linear_softmax_4class
+  seed: 2026
+  optimizer: adamw
+  lr: 0.01
+  weight_decay: 0.001
+  max_epochs: 200
+  batch: full            # full-batch feature training
+  augmentation: none
+  class_weights: none
+  lr_search: none
+  device: cpu            # cached 270-dim features; deterministic CPU full-batch
+  standardization: per_column_inner_train_only
+  standardization_rules:
+    s_columns_valid_rows: inner_train_has_valid_s_only
+    missing_s_after_standardization: zero
+    zero_variance_or_empty_column: output_zero   # deterministic, finite
+    zeroed_variant_slots: applied_after_standardization   # unused slots stay exactly zero
+  selection:
+    primary: inner_val_macro_f1
+    secondary: inner_val_accuracy
+    tie_break: earlier_epoch
+  evaluation:
+    inner_val: checkpoint selection only
+    outer_eval: once, after the checkpoint is frozen
+    refit_on_full_data: false   # explicitly not done this round
+  key_class_pairs:            # frozen definition of the "two key class pairs"
+    - [plastic_fish, real_fish]
+    - [metal_submarine, plastic_submarine]
+  report:
+    paired_deltas: [P2_minus_P1, P2_minus_P0]
+    fixed_broken_counts: true
+    per_group: true
+
+# --- Execution guards ------------------------------------------------------
+guards:
+  refuse_fit_without_explicit_mode: true   # --dry-run or --fit required
+  refuse_existing_output_dir: true
+  refuse_fit_on_blocked_protocol: true
+  refuse_test_split_members: true
+  no_training_by_agent: "the agent runs --dry-run only; --fit commands are written for the user"

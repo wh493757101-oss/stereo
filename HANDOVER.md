@@ -296,6 +296,79 @@ macro-F1 差值仅 `+0.000185`，按采集组 bootstrap 的 95% CI 为 `[-0.0029
 - 证据：analysis/runs/material_runtime_v2_mask/codex_4b_blockers_20260929_c93e61/。本轮生产修改限 scripts/closeout_material_pipeline.py，新增 tests/material_fusion/test_material_pipeline_blockers.py，并更新本文件及实验文档。
 - 以上四项代码契约已在合成 CPU 验收中关闭；真实历史证据 closeout、全量验证仍未运行，不能据此宣称整体 4B、偏振收益、泛化、性能或部署通过。未训练、未修改真实数据/权重/历史报告/默认配置，未提交推送。
 
+### 2026-09-30 现有数据条件下的检测诊断与偏振信息验证准备（material_existing_data_v1；未训练）
+
+- 新增协议层 `core/existing_data_protocol.py` 与入口 `scripts/prepare_existing_data_protocol.py`：固定基线身份（Model A/E1/E4/独立回退/官方 MiT-B0 全部 SHA256 复核）、V5 全量准入复用既有门（未新增第二套指纹）、开发池=原 train+val（945 帧/2446 样本/2446 GT，test 仅用于排除成员）、4 个无目标帧保留单列、GT↔NPZ 对应 0 缺口；整采集组为单元、seed 2026 全局类计数平衡贪心生成 3 外层折（outer_eval/inner_train/inner_val 全类覆盖，fold 状态 OK），审计组交叉/重复成员/序列不拆分。产物 `analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/`。解释边界已写入 protocol.json：仅为训练层组隔离，非新盲测，历史权重诊断不构成 OOF；跨组物理对象关系无来源、记 unknown。
+- 新增检测诊断 `scripts/diagnose_existing_detection.py`：固定四条件 D0(0.25/640)/D1(0.10/640)/D2(0.05/640)/D3(0.25/960)，匹配复用 eval_material_pipeline（IoU≥0.50 不降阈），GT 跨条件身份=(frame_id, object_index)。**D0 与 4B 历史基线完全一致**（180/368/380/346/22/34，逐帧一致）；D1 匹配 352、D2 匹配 355、D3 匹配 346。22 个未匹配 GT 规则化迹象归因：confidence_related×9、no_corresponding_prediction×10（全 real_fish）、input_scale_related×2、duplicate_or_merge×1——real_fish 召回 conf 0.25→0.05 由 0.167 升至 0.444，imgsz 960 无增益。图册覆盖全部未匹配事件+各类对照（未人工复核）。Model A 单阶段 p50≈28-31ms（非系统 FPS）。每条件首次前向后建立参数/buffers 基线（首前向初始化差异显式排除并记录），其后全程逐一不变。产物 `…/detection/`。
+- 新增 `core/material_probe.py`、`scripts/prepare_material_probe.py`、`scripts/train_material_probe.py`：G=官方 MiT-B0 最后一级（256 维）实例 mask 加权池化（eval+inference_mode，提取全程参数/buffers 快照逐一相等）；C=quality 前三项+实例内灰度均值/方差+S 区非空标记（**不含 mean_abs_q**）；S=instance_mask∩polar_valid 上 signed_q 均值/std(ddof=0)/五分位+abs_q 均值（2341/2446 有效，105 显式缺失，NaN 不当零）。缓存只存原始特征（无标准化/PCA）；标准化在拟合入口按折 inner_train 拟合（S 列仅有效样本；缺失置零；零方差列输出零）。偏振质量统计：real_fish 内部有效率 0.544 最低（轮廓带 0.441）；亮度相关弱（Pearson 0.153）；曝光/增益/gamma/时间戳 NOT_AVAILABLE、同步 unknown。泄漏规则有专门测试（扰动 mean_abs_q/signed_q 不改 C；扰动 signed_q 改 S）。产物 `…/features/`。
+- 探针训练契约（真实 `--fit` 由用户手动执行，Agent 仅跑过真实缓存 dry-run 且通过）：线性 4 类头、P0/P1/P2 共享 [G,C,S] 槽位（不用槽位严格置零）、inner_val 选模（Macro-F1→accuracy→早 epoch）、outer_eval 冻结后只评一次、固定预算（seed 2026/AdamW/0.01/0.001/≤200ep/全批次/无增强无加权无调参）、不按 outer_eval 选模、输出目录拒绝覆盖、BLOCKED 协议拒绝 fit（exit 3）、NOT_RUN 时不产出训练结果。用户命令见 `manual_commands.ps1`。
+- 验证：新增 103 项合成测试（35 协议+20 检测+48 探针，TDD）；聚焦三文件 103 passed、material 套件 1063 passed/1 failed/4 skipped、全量 1835 passed/1 failed/6 skipped、compileall 0、`git diff --check` 0。唯一失败为 `test_license_file_matches_upstream_digest`：**接手时既有的环境性失败**——`core.autocrlf=true` 使 models/cmx/LICENSE 工作区为 CRLF 而提交内容为 LF（提交版本 SHA256 与期望一致），本轮未触碰 models/cmx，未修改测试或许可文件。覆盖率 NOT_MEASURED（未安装 pytest-cov）。日志与退出码在 `…/logs/`。
+- 受保护资产核对：协议记录的全部权重/证据 SHA256 与运行后复算一致；V5 manifest/summary 与审计记录一致；git 工作区仅含本轮新增源文件与 .gitignore 一行（新增 `analysis/runs/material_existing_data_v1/` 忽略规则）。本轮无任何真实数据训练；无偏振收益或独立泛化新结论。下一轮唯一优先建议（依据检测归因）：先处理 real_fish 检测置信度/召回层面（D1/D2 工作点代价需与误检一起权衡），不动分类/融合。
+
+### 2026-09-30 修复轮：训练准入、缓存绑定、图册与入口控制流（material_existing_data_v1；未训练、未真实前向）
+
+- Codex 只读核实上轮 839 个产物摘要一致、分组无交叉、D0-D3 计数可信；本轮修复的是入口保护与交付缺口（非缓存损坏证明、非实际泄漏）。
+- **缓存绑定与训练准入**：`core/material_probe.py` 新增 `build_cache_binding`/`verify_cache_binding`（三个缓存文件 SHA256+长度为预期状态，禁止"现算现当预期"）、`authoritative_sample_index`（逐折互斥/完整/组不交叉/每折恰一角色/outer_eval 全局恰一次——"某折重复另一折缺失但总数相同"被拒绝）、`verify_cache_manifest`（行序=冻结行序契约，逐行身份/角色/严格布尔核对）、`verify_cache_arrays`（键/形状/dtype/类别行/G,C 有限/有效 S 有限/缺失 S 全 NaN/C 非空标记与 s_valid 一致/imgsz/预处理/槽位顺序/类别顺序/编码器身份）。`scripts/train_material_probe.py` 准入链重写，dry-run/fit 共用，产出 `admission.json`（协议/缓存绑定/类别/特征定义/fold/variant/seed/预算），错误在任何头构建、scaler.fit、训练产物写出之前拒绝。
+- **特征准备真实准入**：`scripts/prepare_material_probe.py` 改用 `admit_mask_dataset` 完整门（2808 文件逐一复核 + mask 解码 + 来源重哈希 + V5/V4 指纹比较），不再以 `mask_dataset_fingerprint()` 冒充完整性验证；数据准入检查清单写入 feature_definition.json 的 `data_admission`。原轮提取预算会抛异常，但入口 PARTIAL 与已完成批次落盘当时尚未实现，不能视为已验收；后续预算收尾单独记录。
+- **缓存升级**：`scripts/upgrade_probe_cache.py`——旧目录只读，验证旧 artifact_manifest 对三个缓存文件的覆盖与摘要、旧协议自洽、当前 2808 文件完整准入、缓存身份/数组后，按字节复制到新目录 `…/20260930T045500Z_c5d9e8/upgrade/corrected_features/`，生成新 `cache_binding.json` 与 `upgrade_report.json`（字节一致性 original vs copied 三文件全部 identical=True），修复后统一准入复验通过；真实 dry-run 通过（fold0 1116/490/840，fold1 1265/470/711，fold2 1191/360/895）。G/C/S 零重提取。
+- **图册重绘**：`render_event_panel`/`rebuild_atlas_from_evidence` + `--rebuild-atlas` CLI——从已保存证据重绘，不调用模型。真实输出 68 面板（22 未匹配 GT + 34 未匹配预测 + 12 对照），GT 绿轮廓/预测红轮廓带逐预测置信度/匹配或最大重叠 IoU/采集组/"迹象，未人工复核"标注全部实际绘制；未匹配 GT 无相关预测时明确标注。合成绘图测试验证红色/绿色像素确实存在；人工抽查三类各一张（unmatched_gt real_fish、unmatched_pred plastic_fish 帧、control plastic_fish）确认合格。
+- **失败停止/设备/预算**：真实 main() 合成测试证明 D0 不一致后不构造计时模型、不执行后续条件/计时前向（exit 2，evidence 保留，atlas 仍由已保存证据产出）；`measure_timing` 设备经 `torch_device_name` 规范化（"0"→cuda:0 每次测量前后真同步；CPU 路径 monkeypatch 证明不触碰 CUDA）。原轮 BudgetWatch 的入口 PARTIAL/2 测试仅覆盖诊断开始前耗尽，未覆盖计时中途及特征提取入口；不再概括为全部路径通过。上一轮历史计时在 device="0" 未走显式同步分支下测得（生产解析含 CPU 回传，不能断言原时延偏低；数值未改写）。
+- **文档纠正**：D3 与 D0 总匹配数相同但找回 7 丢 7（real_fish 找回 1 丢 1）、未匹配预测 34→25——只说"总体匹配数与 real_fish 召回没有净提升"，不写"尺度无作用"；C 的灰度统计是标准差（ddof=0）不是方差；折支持数表修正（outer_eval GT=样本数 840/711/895）；测试结果完整记录（material 1063 passed/1 failed/4 skipped，全量 1835 passed/1 failed/6 skipped，唯一失败=既有 LICENSE CRLF/LF 换行差异，未跳过未弱化）。
+- 验证（按 `20260930T045500Z_c5d9e8/logs/` 纠正）：`pytest_focused_02.log` 为 105 passed；`pytest_material_02.log` 为 1114 passed/1 failed/4 skipped；`pytest_all_03.log` 为 1886 passed/1 failed/6 skipped（LICENSE 失败同上，单列既有问题）。撤回未绑定本轮日志的 171/1887 数字，不改写历史日志。compileall 0；`git diff --check` 0。覆盖率 NOT_MEASURED（未安装工具）。`.zcodeignore` 归属不明，未改动、未删除、保持未跟踪。
+- 受保护资产复核（SHA256，非 mtime）：Model A/E1/E4/回退/MiT-B0、V5 manifest/summary/audit、旧轮 839 产物清单、历史 4B 证据——运行前后一致。真实数据训练 NOT_RUN；`--fit` 命令在 manual_commands.ps1 供用户执行（使用 corrected_features 路径）。
+
+### 2026-09-30 预算入口收尾（本次用户授权 Codex 实施；真实训练 NOT_RUN）
+
+- 证据：`analysis/runs/material_existing_data_v1/20260930_codex_budget_finish_b81f29/`。改动仅两项生产脚本、一个新增合成测试文件、实验说明/HANDOVER/manual_commands.ps1；未改训练算法或现有缓存。
+- 检测计时前/预热及重复测量边界使用同一预算：超时保留完成条件和原始计时，summary/timing 统一 `PARTIAL_BUDGET_EXCEEDED`、exit 2；普通计时异常 `FAILED`、exit 1，不再留下顶层成功摘要。
+- 特征提取超时保存已完成 G 行和 sample_name 到明确的部分诊断产物；首批前耗尽不构建编码器，零完成行不伪造 NPZ。部分目录不发布正式缓存绑定，真实训练 main() 合成拒绝用例证明在任何拟合前停止。无续提取功能；预算为安全边界检查，不承诺抢占单次调用。
+- TDD：`red_01.log` 7 failed/3 passed → `green_01.log` 10 passed；再补三个回归用例后 `focused_02.log` 167 passed（六文件）。`all_01.log` 1899 passed/1 failed/6 skipped，exit 1，唯一失败为既有 LICENSE 换行差异。compileall、git diff --check、PowerShell Parser 通过；覆盖率 NOT_MEASURED。
+- 已纠正原轮未绑定日志的 171/1887 数字和“所有超时路径已验收”表述。PowerShell 用 `& .\manual_commands.ps1`，不能用 python 启动；dry-run 只读输入但会写新报告，失败/中断可保留部分目录。
+- 未执行真实 fit、checkpoint 加载/前向、特征重提取、检测计时或 GPU。后续由用户手动启动 P0/P1/P2 拟合，本轮不证明分类收益或独立泛化。
+
+### 2026-10-08 残差协议冻结与 P0 基线复算（material_polar_residual_v1；未训练）
+
+- 用户已完成三折 P0/P1/P2 拟合（`analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/`）：P0 三折 Macro-F1 0.9449/0.9170/0.9364（均值 0.9328），P1 0.9289、P2 0.9205——P2 未见收益，P0 冻结为灰度基线。
+- 新增 `scripts/verify_p0_baseline.py` + `tests/material_fusion/test_p0_baseline_verification.py`（7 项合成）：复用既有准入链，加载每折已保存 scaler（不重拟合）与 P0 线性头（CPU 线性前向，无编码器），对每折 outer_eval 逐样本复算预测/Macro-F1/accuracy/各类召回/混淆矩阵，与保存的逐样本预测、fold report、summary 三方逐项比对；不一致即停止（MISMATCH exit 2；身份/绑定问题 REFUSED exit 1）。全部文件 SHA256 记录在报告。
+- 真实核验（`analysis/runs/material_existing_data_v1/20261008T093000Z_f4b1a7/baseline/`）：三折逐项一致（exit 0）；三折平均 Macro-F1 0.9328、合并外层 0.9350（分列不混用）；合并召回 metal 0.9875 / plastic_submarine 0.8611 / plastic_fish 0.9606 / real_fish 0.9220。
+- 新增冻结协议 `configs/experiments/material_polar_residual_v1.yaml` + 文档 `docs/experiments/material_polar_residual_v1.md`：R0=P0、RC=P0+C 修正、RCS=P0+C+S 修正；残差头 14→4 无 bias 零初始化，delta=valid_s*0.5*tanh(Wx)，final=P0+delta，无效 S 精确回退 P0；CPU/200ep/AdamW/0.01/0.001/seed2026，epoch0 恒为候选，outer_eval 不进训练或选模；六条工程推进门槛与 5 种子（2026–2030）打乱协议（valid_ratio/gray_mean 三分位分箱 donor 匹配）预先冻结。残差训练入口未实现（下一批）；本批未训练、未修改分类算法、未动旧配置。
+- 验证：聚焦 47 passed；material 套件 1134 passed/1 failed/4 skipped；全量 1906 passed/1 failed/6 skipped（唯一失败仍为既有 LICENSE CRLF/LF 换行差异）；compileall 0；git diff --check 0。受保护资产（权重/V5 manifest/协议/缓存/用户拟合）SHA256 前后一致。
+
+### 2026-10-08 P0 基线核验入口加固（material_polar_residual_v1；未训练、未真实前向变更）
+
+- 已确认反例（上一轮核验入口会错误放行）：保存 logits 改 NaN/±Inf 仍 COMPLETED；fold report 指标改 NaN 仍通过；summary.oof.P0.macro_f1_mean 改 0、逐样本 group 改为不存在组、fold report 的 fold/variant/support 改错、重复/缺失 P0 折记录均通过；修改 scaler 的 C 均值（+100）仍通过（P0 前向的 C/S 输入被置零，掩盖了 scaler 错误）。
+- 修复（`scripts/verify_p0_baseline.py` 重写）：①数值比较前严格检查——checkpoint 张量/scaler 数组/保存 logits/复算 logits/指标/epoch/support 的形状、类型与有限性（bool 不算整数），非有限值在任何减法/argmax/指标计算前 REFUSED，不用 nan_to_num/强转/跳行放行；②身份与汇总——逐样本身份（name/group/class_id 与权威清单+折角色逐行一致、行序契约、唯一性、行数）、每折产物身份（checkpoint/fold report/summary 的 fold/variant/维度/类别/support）、P0 折记录集合完整无重复（不用 next()）、admission 字段（类别顺序/特征定义/g_dim/预处理）、选模三方一致且按冻结规则对完整 200 epoch 历史只读复算最佳 epoch 交叉核对、summary 三折平均与 paired 中已保存 P0 pooled 值核对（pooled 来自已校验内存标签/预测）；③scaler 全列检查——按权威 inner_train 行（G/C 全部行，S 仅有效行）只读复算 270 列 mean/std(ddof=0)/usable 与保存 scaler 逐项比较（不调用 Standardizer.fit、不写回），不符即 REFUSED；④退出码由异常类型决定（VerificationRefused=1 / VerificationMismatch=2），不解析错误文案；报告记录容差与最大 logits 误差，区分"预测一致/指标一致/logits 在容差内一致"；linear_forward 文档明确 float64 累加转 float32、与 PyTorch float32 不保证逐位相同。
+- 测试（`tests/material_fusion/test_p0_baseline_verification.py` 重写，38 项，真实 main() 路径单因素反例）：A 数值（NaN/+Inf/-Inf logits、非有限指标、非法权重/bias 形状与非有限权重、合法有限差异→MISMATCH）；B 身份与汇总（错 group/class_id/sample_name/行数、错 fold/variant/support/bool support、重复/缺失折、选模 epoch/指标矛盾、非最佳 epoch、只改三折平均、只改已存 pooled、admission 类别/预处理）；C scaler（只改 C mean、只改 S std、只改 usable、非法长度/类型/非有限、全列一致通过、fit 探针+scaler 字节不变+无编码器构造探针）；D 状态（合法 main() 返回 0 且报告完整、失败无成功报告、已有输出目录拒绝）。首轮 RED 27 failed/11 passed，实现后全绿。
+- 真实只读复核（`analysis/runs/material_existing_data_v1/20261008T120000Z_c8d2e6/baseline_v2/`，exit 0）：三折 scaler 全列 VERIFIED（与 inner_train 只读复算逐位一致，最大差异 0；S 有效行 1061/1206/1138）；logits 最大差 5.7e-06（容差 1e-4 内）、预测逐样本一致；指标与三折平均、pooled P0（0.9350）全部一致。实验配置指向新核验证据（科学内容未变）；首次核验证据保留只读。
+- 验证：聚焦（p0_baseline_verification + cache_admission）47 passed；material 套件 1181 passed/1 failed/4 skipped；全量 1953 passed/1 failed/6 skipped（唯一失败仍为既有 LICENSE CRLF/LF 换行差异）；compileall 0；git diff --check 0。覆盖率 NOT_MEASURED。
+- 状态：当前真实 P0 基线未发现数值异常；本轮关闭的是核验入口的错误放行缺口；残差训练入口仍未实现；RC/RCS 真实训练仍 NOT_RUN。
+
+### 2026-10-08 P0 核验入口第二轮补齐（折集合/完整历史/三方指标/内存 pooled；未训练）
+
+- 已确认反例（上一轮 v2 核验仍会放行）：summary.oof.P0.folds 某折 support=0 或 variant="P2"、添加额外 fold9、admission.input_dim=999 仍 COMPLETED；200 条历史删到只剩选中 epoch 一条仍通过；fold report 或 summary 的 inner_val_macro_f1 改 NaN 仍通过；main() 在 verify_fold 后重新读取预测 JSONL 拼 pooled，与报告声称的"已校验内存结果"不符；合成夹具 build_fit 用 outer_eval 数据训练（角色不一致，未触真实数据）。
+- 修复（`scripts/verify_p0_baseline.py`）：①折集合一次性核验 `verify_p0_fold_records`——fold 严格来自协议（缺失/额外/重复/非法记录 REFUSED，不过滤不用 next()），variant 必须为 P0，support 严格整数且等于权威 outer_eval 数量，selected_epoch 严格整数，内/外层指标有限且在 [0,1]；②admission 必需字段不得通过删除或 None 跳过——input_dim 严格正整数且等于缓存 G+C+S 宽度（270），imgsz/g_dim/类别顺序/预处理/budget(max_epochs/seed) 全部强制；③完整历史核验——预期 epoch 数来自已准入训练预算（summary.admission.budget.max_epochs，非硬编码），checkpoint budget.max_epochs 与之一致（单改一处不合法），历史数量==max_epochs、编号集合==1..max_epochs、生产升序、epoch 严格整数拒 bool/浮点/字符串/重复/缺号/越界，train_loss 有限非负（不限于 [0,1]）；④三方选模指标——fold report 与 summary 的 inner_val_macro_f1/inner_val_accuracy 与 history.selection 逐项比对（有限、[0,1]、METRIC_ATOL）；⑤pooled 直接消费 verify_fold 返回的已复算 labels/predictions（不再读 JSONL），报告记录 pooled 样本数与各折覆盖。
+- 测试（TDD：首轮 RED 24 failed/46 passed → 修复后 70 全绿，真实 main() 单因素）：A 折集合与 admission（support=0/bool、variant=P2、fold9、非记录项、input_dim 999/宽度不符/None、imgsz None、budget 删除）；B 历史（仅剩选中 epoch、缺非选中 epoch、等量重复、越界/bool/浮点/字符串 epoch、checkpoint 预算矛盾、完整合法历史通过并记录 history_check）；C 三方指标（fold report/summary 内层 F1 与 accuracy 不一致、NaN、bool、越界 [0,1]）；D 内存 pooled（read_text 计数器证明每折恰一次解析、main 不再读文件；pooled 样本数与混淆总数一致）与夹具角色（参数探针证明 train_linear_probe 收到 inner_train 的 design/labels，选模为 inner_val）。夹具修正：训练=inner_train、选模=inner_val、outer_eval 仅由选中模型产生预测；有限差异测试用 in_range_variant 保证改动仍处 [0,1]。
+- 真实只读复核（`analysis/runs/material_existing_data_v1/20261008T140000Z_a9b8c7/baseline_v3/`，exit 0）：三折历史 VERIFIED（200/budget 200/checkpoint 200），scaler 全列逐位一致，logits 最大差 5.7e-06，三折平均 0.9328、pooled 0.9350（2446 样本）与 summary/分项记录一致。实验配置核验证据路径切至 v3（科学内容未变）；v1/v2 证据保留只读。
+- 验证：聚焦（p0_baseline_verification + cache_admission，新 basetemp）91 passed；material 套件 1221 passed/1 failed/4 skipped；全量 1953→见日志（唯一失败仍为既有 LICENSE CRLF/LF 换行差异）；compileall 0；git diff --check 0。覆盖率 NOT_MEASURED。
+- 状态：当前真实 P0 基线未发现数值异常；残差训练入口仍未实现；RC/RCS 真实训练 NOT_RUN。
+
+### 2026-10-08 残差实验实现（RC/RCS；合成测试 + 真实 dry-run；真实拟合 NOT_RUN）
+
+- 新增 `core/material_residual.py`：ResidualHead（14→4 无 bias 零初始化，确定性 seed）；delta=valid_s·0.5·tanh(Wx)（幅度≤0.5，无效 S 精确回退 0）；RC 在输入层置零 S 槽（改 S 值不影响 RC 输入，测试钉住）；P0 logits 为 detached 常量（梯度不可达 P0）；训练循环仅接收 train/val 张量（签名无 outer_eval 参数）；epoch 0 恒为首候选并按共享规则平分取更早；loss=CE+0.01·mean(delta²)。fit_residual_scaler 从 inner_train 只读拟合 C/S 14 列（C 全部行、S 仅有效行）。
+- 新增 `scripts/train_material_residual.py`：--dry-run/--fit 显式互斥、已有输出目录拒绝；准入在头构造/scaler 拟合/产物写入之前——复用 verify_p0_baseline 的协议/缓存绑定/admission 身份/折记录集合/每折 P0 基线完整复算（logits、指标、scaler 全列、完整 200 epoch 历史）链，基线不一致即 MISMATCH/2 停止；每折每变体：新拟合 scaler 与已保存 P0 scaler 的 C/S 段一致性断言（并重跑全列来源核验），训练后 P0 参数/buffers 快照逐一比对不变；产物 admission/provenance/scaler(含一致性检查)/residual_state.pt/history/选中 epoch/逐样本 logits+预测+delta+p0_logits+组+缺失状态/混淆/逐类召回；三折平均与 pooled 分列；RCS−R0、RCS−RC 改对改错；全部选中模型冻结后运行 5 种子打乱诊断（edges 预先从该折 inner_train 三分位计算，同 split 同箱无自身对应，单元素箱如实未匹配，逐种子覆盖率/同组 donor 比例/逐样本 donor 保存）。
+- 新增 `tests/material_fusion/test_material_residual.py`（31 项，TDD）：零初始化=精确 P0、无效 S 回退、RC 不读 S、delta 幅度界、P0 冻结与梯度隔离、scaler 只读训练角色、签名无 outer_eval、epoch 0 胜出/平分、保存恢复前向一致、身份/绑定/折成员/目录拒绝、三折外层恰好覆盖一次、打乱无自身对应与未匹配记录、main 合成 fit/dry-run 控制流、ps1 Parser.ParseFile 语法检查与调用方式检查。
+- 新增 `scripts/manual_material_residual.ps1`：默认 dry-run，显式 -Mode fit 才训练 RC/RCS×3 折；解释器核对；参数数组 splatting；preflight 非零终止；每次新输出目录。
+- 真实数据 dry-run（`analysis/runs/material_polar_residual_v1/20261008T160000Z_b3c4d5/dry_run/`，exit 0）：三折准入+预览通过（train 1116/1265/1191，val 490/470/360，eval 840/711/895；P0 基线 macro_f1 0.9449/0.9170/0.9364 复算一致）。**真实 --fit 未运行（等用户手动执行）；本轮无真实数据训练、无真实 forward 之外的模型写入。**
+- 验证：聚焦（residual+cache_admission）109 passed；material 套件与全量见日志（唯一失败仍为既有 LICENSE CRLF/LF 换行差异）；compileall 0；git diff --check 0。覆盖率 NOT_MEASURED。
+
+### 2026-10-08 打乱诊断修复批次（残差实验 v2；真实拟合 NOT_RUN）
+
+- 确认并修复五处缺陷：①诊断把接收方 C 置零；②run_shuffle_for_fold 传入原始 S 而非标准化 S；③shuffle_assignment 从全部行选 donor（真实复现 fold0/seed2026：806 个有效接收方选到 36 个无效 donor，标准化 S 为 NaN）且各接收方独立有放回选择导致 donor 重复（非置换）；④逐样本 logits 被 pop 丢弃；⑤ps1 提示使用不存在的 oof.* 字段。
+- 修复：`shuffle_assignment` 改为有效接收方集合内 (split,bin) 分组的双射（seeded shuffle + 旋转至无固定点；单元素箱 unmatched；依赖冻结分箱/角色/有效状态/稳定行序/seed）；`run_shuffle_diagnostic` 新签名接收标准化 c/s（C 逐元素不变、P0 不变、s_valid 不变、只交换有效标准化 S），内置恒等核验（二次前向必须精确一致）与 unmatched/invalid 行输出精确性检查（违反即拒绝）；`run_shuffle_for_fold` 传入 c_std/s_std、保留逐样本 logits、按 sample_name 对齐的成对统计（vs normal RCS/P0/RC/R0，单变体如实 NOT_COMPARABLE）、逐类/逐组 fixed/broke、matched 子集指标与全体分列；事件顺序改为全部折/变体冻结后统一诊断（合成测试断言调用次序，修复前 RED：max(fit)=7 > min(shuffle)=2）。
+- 测试：38 项（单元 derangement/单元素箱/无效 donor/seed 复现/精确签名；生产路径 C 保持、标准化 S 生效、恒等前向、无效行回退、逐样本证据完整且可复算、合成 main fit、事件顺序）。首轮 RED 如实记录（事件顺序断言 max(fit)=7>min(shuffle)=2 等）。
+- 真实只读 donor 检查（`analysis/runs/material_polar_residual_v1/20261008T180000Z_e4f5a6/donor_check/`，脚本+JSON 保留）：3 折 × 5 种子全部通过——无效 donor=0、自身对应=0、重复 donor=0、每箱双射、不跨 split/bin；有效接收方 806/687/848（无效行 34/24/47）；覆盖率 fold0 1.0、fold1 0.9985（单元素箱）、fold2 1.0。
+- 修复后真实 dry-run（`…/20261008T180000Z_e4f5a6/dry_run/`，exit 0）通过。ps1 提示更正为 variants.*。真实 RC/RCS 拟合与真实打乱模型评估仍 NOT_RUN；不证明偏振收益。
+
 ## 已解决问题的影响
 
 | 原问题 | 若不修复的影响 | 当前处理 |
@@ -380,3 +453,248 @@ macro-F1 差值仅 `+0.000185`，按采集组 bootstrap 的 95% CI 为 `[-0.0029
 4. 核对四个 `best.pt` 和三个正式 JSON 报告的 SHA-256。
 5. 任何数据重建都从原始 `Single/Mixed` 与标定文件开始，输出到新版本目录，不覆盖 v2。
 6. 任何“偏振有效”“实时”“深度准确”的表述，都必须分别由消融、完整管线 benchmark、距离真值支持。
+
+## 2A 补充记录（2026-10-08，偏振区域诊断补修）
+
+- `material_polar_residual_v1` 的 2A 区域诊断存在三项已确证缺口并已补修：
+  历史保护快照因项目根推导错误而无效（标记 INVALID_PROTECTION_EVIDENCE，
+  未补造历史状态）；V5 完整准入（含标注来源校验）现于任何统计前实际执行；
+  扰动实验语义更正为 `saved_q_roi_sampling_shift`（已保存 q 图的 ROI 采样
+  平移），其 mean/std 汇总（1.6%）不是误差上界（逐样本 max 0.0278，约为
+  样本间 std 的 60%），不能用于排除左右配准或辐射不一致。
+- 证据：`analysis/runs/material_polar_residual_v1/regionqa_fix_20261008T152406Z_5aa77e04/`；
+  可跟踪入口 `scripts/diagnose_polar_region_quality.py`。
+- 偏振结论不变：`polarization_benefit = NOT_ESTABLISHED_BY_THIS_ROUND`；
+  任何"偏振有效"表述仍须通过配对消融门槛。
+
+## 2A 测试收尾记录（2026-10-09）
+
+- 2A 补修批的测试证据三项收尾：拒绝型统计探针改为先记录调用再抛出
+  （校准测试 + 受控故障注入证明入口的异常转换不会掩盖调用记录）；三个
+  合成准入反例加强为"返回码 + 零调用 + stderr 稳定错误片段 + 无诊断产
+  物"四重检查；`build_protection_snapshot` 对目录内后代（含 junction/
+  符号链接节点）在读取/哈希前做真实路径包含检查（目录链接越界用真实
+  junction 验证，文件链接越界为 monkeypatch 模拟并如实标注）。
+- 文案纠正：INVALID_PROTECTION_EVIDENCE 标记位于 protection_report.json
+  （diagnostics_summary.json 无此字段）；上轮 3906 为文件记录数、独立文
+  件数 3901；V5 保护文件为 2808 NPZ + 3 元文件。历史报告与产物未回写。
+- 偏振结论不变：不采纳区域规则、不建缓存、不训练；ROI 采样扰动不能验
+  证左右配准。证据：
+  `analysis/runs/material_polar_residual_v1/regionqa_test_finish_20261009T010101Z_ddf208c5/`
+
+## 局部偏振统计记录（2026-10-09，material_polar_local_interior_band_v1）
+
+- 方案 A（interior/band 分别统计，划分而非过滤）已预注册并实现；残差输
+  入 14→30 维，其余全部冻结；真实本地缓存与 dry-run 已完成，**真实 fit
+  由用户手动执行**：`& .\scripts\manual_material_local_residual.ps1
+  -Mode fit`。
+- 归因口径：RC_local−R0 = 区域/灰度信息增益；RCS_local−RC_local = 额外
+  偏振增益；旧全局版本仅作参照。
+- 协议与门槛：`docs/experiments/material_polar_local_interior_band_v1.md`。
+
+## 局部残差修复记录（2026-10-09，material_polar_local_interior_band_v1）
+
+- 六项修复：外层 x_eval 未装配（NameError）、折指标/汇总字段不一致、
+  逐类改对改错按比较分列（求和必须等于 paired）、打乱协议 v2（复合分箱
+  = 原 bin×4 + interior×2 + band，完整 S16 同 donor，覆盖率按区域如实
+  报告）、verify_local_cache 逐块"全有限 XOR 全 NaN"（拒绝 Inf/部分
+  NaN）、诊断失败落盘 FAILED+failed_phase 而非 COMPLETED。
+- 打乱协议 v2 已在配置与协议文档预注册；真实 fit 前生效。
+- 真实 fit 仍 NOT_RUN（用户手动执行 `& .\scripts\manual_material_local_residual.ps1 -Mode fit`）。
+
+## P0 身份修复记录（2026-10-09，material_polar_local_interior_band_v1）
+
+- 局部入口的 P0 底座曾把完整标准化 G+C+S 喂给只读 G 的冻结 P0 头
+  （权重未变、前向输入错）。历史拟合 manual_20261009T130447 标记
+  **INVALID_FOR_FROZEN_P0_COMPARISON**，不得用于偏振收益验收。
+- 修复后：P0 设计 = 冻结 scaler 标准化 + assemble_design_matrix("P0")；
+  dry-run/fit 共用的身份校验（oracle jsonl 字节 SHA + 逐样本 logits
+  atol 1e-4 + 预测精确一致 + 三处禁用槽精确为零）在训练前执行；同一
+  已核验链服务 R0/RC/RCS/shuffle/回退；CLI --fit-dir 与配置来源不一致
+  即拒绝；admission 与 summary 保存 p0_identity。
+- 真实 dry-run 实测：2446 样本 P0 logits 与冻结 oracle 逐位一致，105
+  缺失 S 单列核验通过，冻结 P0 Macro-F1 三折精确复现。
+- **六次真实局部拟合须由用户重新运行**（NOT_RUN）；旧结果作废。
+
+## 条件残差记录（2026-10-09，material_conditional_residual_v1）
+
+- P0 输出上下文（softmax×4 + top margin，模型输出非校准概率）的条件修
+  正已实现并通过合成验收（18 次拟合 + 45 份打乱）；真实 dry-run 通过；
+  **真实 18 次拟合 NOT_RUN（用户手动执行）**：
+  `& .\scripts\manual_material_conditional_residual.ps1 -Mode fit`。
+- 停止条件（预注册）：若相对 RC 与 R0 仍无稳定净收益 → 建议停止本轮偏
+  振模型扩张，不进入更大网络或 joint 微调。
+
+## 条件残差修复记录（2026-10-09 第二批，cond_fix）
+
+- 四项修复：RC 实际输入屏蔽 S（逐变体装配）；paired 逐样本对齐 + 支持
+  数不变量（不再 zip 截断）；线性参照绑定 manual_20261009T135646
+  （SHA256 22ff7a81…，准入核验 P0 oracle/协议/缓存/折身份）；折均值与
+  pooled 字段分离（macro_f1_by_variant）。
+- 真实 18 次条件拟合仍 NOT_RUN（用户手动执行）。
+
+## 条件残差修复记录（2026-10-09 第三批，cond_fix2）
+
+- expected_sha256 必填且严格校验（缺键/空/None/False 不再跳过摘要比较；
+  格式非法拒绝、合法不匹配 MISMATCH；训练前拒绝，不产生 output 目录与
+  训练调用）；既有状态/P0 冲突测试补合法摘要以命中各自目标检查。
+- 打乱诊断 normal 输出绑定已保存 RCS 外层预测（fold_variant_report 身
+  份核对 + sample_name 对齐 + 逐样本精确 logits/prediction 一致 +
+  双侧 argmax 自洽 + 有限四维；失败 FAILED/failed_phase=
+  shuffle_diagnostic）；真实合成 main 故障注入验证。
+- 真实 dry-run exit 0（严格 SHA 校验生效，22ff7a81… 绑定，P0 oracle
+  match）。真实 18 次条件拟合仍 NOT_RUN（用户手动执行）。
+
+## 残差候选运行时集成记录（2026-10-09，material_residual_runtime_v1）
+
+- 已锁定候选（manual_20261009T185911：冻结 MiT-B0 G 特征 + 冻结 P0 线性
+  头 + 冻结修正分支）经独立适配器
+  `models/material_residual_classifier.py` 接入 material_fusion 运行时
+  模式（不进历史 CMX 加载器）；全部身份文件 SHA256 钉死在
+  `configs/experiments/material_residual_runtime_v1.yaml`。仅集成与评
+  估；无训练、无部署、无重选。
+- Layer A（2446 样本全量复现）：状态 OK——G/C14/S16/P0 logits/最终
+  logits/预测逐阶段在预固定容差内全部通过（GPU 上 G 与缓存逐位一致；
+  诊断确认缓存为 GPU 提取，适配器数学与原提取路径逐位等价）。2027/2028
+  种子保存证据与同一 P0 链一致。
+- Layer B（180 val 帧、真实 Model A 预测、固定工作点）：检测 P/R/F1
+  = 0.9105/0.9402/0.9251（346 匹配/22 漏检/34 误检，三变体相同）；
+  条件分类 R0(P0) acc 0.9566 / Macro-F1 0.9569，RC/RCS 0.9538/0.9205；
+  端到端 Macro-F1 R0 0.7301 / RC 0.7278 / RCS 0.7268。**成对差异：
+  RCS−R0 = 0 改对 / 1 改错；RCS−RC = 1/1**；bootstrap（4 组、2000 次、
+  seed 2026）端到端差 RCS−R0 −0.0032 [−0.021, 0.0]、RCS−RC −0.001
+  [−0.008, +0.0002]，正确性差 −0.0027 [−0.0074, 0.0]——真实预测输入下
+  修正分支未优于其自身灰度基线。自然回退 1/346（no_valid_s_region，
+  精确回退到候选自身 P0）。
+- 有界计时（12 帧×(2 预热+5 测量)，RTX 4060 Laptop，已完成）：总 p50
+  191.4 ms → 5.22 FPS（1 目标桶 5.76）；阶段 p50：Model A 33.7 /
+  SGBM 52.6 / depth 7.7 / polar 48.5 / 分类(含编码器) 31.9 ms；峰值
+  VRAM 232 MB。0/5 目标桶无自然帧（NOT_COVERED）。非相机到 GUI 声明。
+- 数据独立性：Model A 与分类器数据同源，Layer B **不是独立盲测**。
+- 结论：按预注册停止条件——条件残差线离线优势微小（+0.0008 折均值）、
+  真实预测输入下无收益（净 −1）——**建议停止本轮偏振模型扩张**；该
+  P0/残差线保留为诊断工具。后续单模型训练/部署需用户另行批准。
+
+## 残差候选完成批记录（2026-10-09，material_residual_runtime_v1 完成批）
+
+- 工程修复：Layer A 比较器诚实性（Inf/空/部分 NaN 拒绝、JSON 安全失败报
+  告）；总判定改为对冻结期望样本集合/9 路候选注册表/必需阶段集合校验
+  （缺失/重复/未知/缺阶段不能判 OK，layer_a 单独失败亦非零退出）；编码
+  器缓存按（权重路径+SHA+设备+imgsz）键控，命中校验设备、拒绝原地迁
+  移；9 路固定候选注册表（新配置 material_residual_runtime_v1_complete
+  .yaml，摘要于任何新结果出现前冻结）。
+- 完整真实评估（GPU 新进程，30 分钟总预算，exit 0，209.3s）：
+  Layer A 2446×9=22014 行全部 OK——G/C14/S16/P0 最大误差 0.0、final
+  9.5e-7（≈1 ULP，容差 1e-4）内、预测零不匹配、945 缺失 S 行全部精确
+  回退共享 P0；检测参照与旧 180 帧记录零差异。
+- Layer B（180 帧、380 预测/候选、3420 条逐预测记录）：仅 conditional
+  s2026 的 RC/RCS 与 R0 不同（cond F1 0.9205 vs R0 0.9569；RCS−R0 = 0
+  改对/1 改错），conditional s2027/2028 与 linear_local RC/RCS 的预测
+  与 R0 完全一致（成对 0/0）；bootstrap 全部 ≤0（仅 s2026 非零）。
+  无任何候选在真实预测输入下优于其灰度基线；fallback 3/380
+  （no_valid_s_region，精确回退）。
+- 独立复算（不经生产汇总函数）：从 frames_complete/predictions_complete
+  重建全部指标与 summary 差异为 0；性能只读复算：p50 191.424 ms、
+  1/p50=5.224、均值口径 4.560，均非相机→GUI 吞吐；新候选性能
+  NOT_MEASURED。
+- 结论范围：旧"停止本轮偏振模型扩张"建议仅适用 conditional seed2026
+  子集；完整矩阵按冻结标准逐候选评估后，无任何候选显示收益，也不构成
+  "偏振本身无信息"的证明。部署/重选/训练仍需用户另行批准。
+
+## 残差运行时收尾批记录（2026-10-10，residrt_finish）
+
+- 四项缺口闭合：三个不可收集测试移入 TestLayerBCollectedAcceptance 并在
+  完全合成世界上真实执行（collect-only 两形态各恰好一次 + JUnit 各执行
+  一次干净通过）；Layer A 判定覆盖全部实际出现阶段报告/s_valid 契约/
+  缺失 S 证据（不默认通过）；独立复算新 CLI（来源清单绑定 + 身份锚点 +
+  输出隔离 + raw 结构准入 + 32 bootstrap 全比较 + 非零退出码 2/3/4）；
+  总预算 BudgetExceeded + 可注入钟 + 30 分钟解析（不再读 benchmark 的
+  15）+ 全程不重置 + 普通异常 FAILED 区分。
+- 冻结证据正式复算（一次，exit 0 PASSED）：锚点核验通过；9 候选/16
+  paired/32 bootstrap/逐组/回退全部字段差异 0；Layer A 冻结记录重判定
+  OK（22014 行，与记录一致）；R0 join 24/24。中间开发运行保留于
+  recompute_dev_intermediate/。
+- 全量/整包 pytest 与真实权重测试 NOT_RUN（授权边界；包装器拒绝
+  scratch 外 torch.load）。模型结论无变化：实际预测输入下无偏振净收
+  益；不宣称偏振无效；部署/训练需用户另行批准。
+
+## 残差运行时收尾二批记录（2026-10-10，residrt_finish2）
+
+- 七个永久 Layer A 判定测试恢复（上轮截掉）；10 个 nodeid collect-only
+  与 JUnit 各恰好一次、全部干净通过。
+- 独立复算完整比较契约扩展（9 个 counts 字段、逐组、matched_iou
+  n/min/max/mean、严格整数/比率检查）；`_counts_for` 缩进 bug 修复
+  （return 误入 for 循环导致 matched 少计）；权威帧来源改为冻结协议 +
+  CSV 链。
+- 总预算全程覆盖 setup/准入/benchmark/发布前（同一 watch 不重置）；
+  不可读帧 → INCOMPLETE(5)；bool/str/None 预算值解析器层拒绝。
+- 正式复算一次 exit 0 PASSED（差异 0、32 bootstrap、Layer A 22014 行
+  OK）。全量/真实权重测试 NOT_RUN。模型结论无变化。
+
+## 残差运行时收尾三批（2026-10-10，residrt_finish3）
+
+- 比较契约扩展（混淆矩阵逐格/逐组完整/bootstrap侧指标/严格整数）；`_counts_for` 缩进 bug 修复。
+- 权威身份准入：协议文件 SHA256 + CSV 链 + 类别序 + matched_gt 关联 + 严格布尔/整数。
+- BudgetExceeded 携带 watch_scope 字段（结构化区分，非文本匹配）。
+- 正式复算 exit 0 PASSED（无 --skip-layer-a-verdict）。closeout 反例测试 9 个因权威验证需合成协议链未全过（比较逻辑由正式复算验证）。模型结论不变。
+
+## 残差运行时收尾四批（2026-10-10，residrt_finish4）
+
+- 纠正：residrt_finish3 focused 实为 77 passed / 9 failed（非 86）；
+  直接原因是反例输出目录位于被消费的来源根内被输出守卫拒绝；正式复
+  算零差异不构成反例验收替代，三项缺口当时未闭合。
+- 复算器权威链去写死化：协议预期取自配置 pin，CSV 预期取自来源清单
+  绑定并逐字节复核的双保护快照（--csv-path 支持合成世界），协议↔CSV
+  冲突硬拒绝；类别序核对 5 个既有字段；注册表身份（family/variant/
+  seed，R0 seed=None）传入 raw 准入。
+- raw 严格准入扩展：帧 group/fold 路由、预测 family/fold/seed、行级
+  pred_instance_id 严格 int（0 合法 False 非法）、used_fallback 严格
+  bool、matched_gt_id 与 matches 精确对应、回退原因合法性。
+- 完整比较契约（总体与逐组同构）：detection/端到端/条件逐类 tp/fp/
+  fn、完整混淆、matched_iou、paired、bootstrap（含 counts_e1/e4）、
+  fallback 计数；双侧严格整数（排除 bool/等值 float）、双侧缺失即差
+  异；描述性字段排除清单随报告落盘。
+- closeout 重建独立合成世界（inputs/outputs 分离、每例复制、独立
+  expected、真实 main、不跳 Layer A）；反例矩阵 26 项，16 项真实 RED
+  （对照 finish3 行为，red_demo.py 存证）。
+- 双预算：每个 warmup/measured 重复前后同一边界先总后自身；发布
+  PARTIAL 前再查总 watch；6 场景 + 真实 main 传播用例全过。
+- focused 132 passed / 0 failed（JUnit 存证）；正式只读复算 exit 0
+  PASSED 差异 0（180 帧/9 候选/Layer A 22014 OK/16 paired/32
+  bootstrap/R0 join 24）。全量/真实权重 NOT_RUN，覆盖率 NOT_MEASURED。
+  模型结论不变。保护核查 1276 文件 0 失败（本轮未开工时刻单独取
+  BEFORE，由早于本轮的历史记录建立等同性，已披露）。
+
+## 残差运行时结构守卫批（2026-10-10，residrt_structure）
+
+- compare_with_summary 三个结构守卫：per_group 候选集合完整核对（差
+  异路径 per_group.candidates；非 dict 容器记结构差异不再崩溃/默认通
+  过）、paired 与 bootstrap（端到端+实例）已有 label 的非 dict 结果
+  块先记 `expected a result mapping` 差异再跳过字段比较。
+- 真实 RED：22 failed / 1 passed（4 个真实 main() 反例 + 函数级
+  None/list/str/bool/int 参数化；None 容器实测 TypeError）；GREEN
+  23 passed。focused 155 passed / 0 failed（JUnit），compileall 与
+  git diff --check 干净。
+- 冻结证据复算 exit 0 PASSED 差异 0（180 帧/9 候选/Layer A 22014
+  OK/16 paired/32 bootstrap/R0 join 24）。
+- 保护口径纠正：上轮 1276 条核验记录 = 1271 个唯一文件（树展开重复
+  计数），且非独立同窗口 BEFORE/AFTER；本轮独立 BEFORE/AFTER 覆盖
+  实际消费冻结输入 122 个唯一文件，逐项一致 0 失败。模型结论不变。
+
+## 保护范围更正与冻结身份补证（2026-10-10，protection_supplement_20261010T082756Z_7e5e99ab32e7）
+
+- 更正：residrt_structure 的 122 项同窗口 BEFORE/AFTER 真实有效，但
+  未覆盖所有实际消费输入——旧收集逻辑只展开 path+sha256 映射，遗漏
+  path+files（双缓存 8 文件）、fit_dir+专用摘要字段（条件拟合 2 文
+  件）、fit_summary+sha256（线性参照 1 文件）与来源绑定的两个保护快
+  照，共 13 项。
+- 13 项只读冻结身份补证全部匹配（预期取自锚点核验后的冻结配置与来
+  源清单，exit 0；含字节绑定的 2 项快照亦匹配；其余 11 项 expected_
+  bytes=unbound 如实标注）。13 项均不在原 122 项内。
+- 语义区分：122 项同窗口 BEFORE/AFTER 一致 + 另 13 项当前字节与此前
+  冻结身份一致（current_bytes_vs_frozen_identity，historical_before_
+  reconstructed=false）；不称 135 项完成历史执行窗口验证。
+- 历史证据开工/收尾各核对一次：旧目录 27 项绑定文件与清单本体摘要
+  （4365e207…）均未改变。三个代码守卫、155 项测试与正式复算结论保
+  留。模型结论不变（未建立偏振净收益）。pytest/compileall/复算入口
+  NOT_RUN。

@@ -1,0 +1,676 @@
+experiment: material_residual_runtime_v1_complete
+candidate:
+  experiment: material_conditional_residual_v1
+  fit_dir: analysis/runs/material_conditional_residual_v1/manual_20261009T185911
+  summary_sha256: 9673f711488f0ac2ead0cc098ff669158594d9a526f01e3a5249f043e30233fa
+  admission_sha256: f2fe5bd5e6f22844b250db6da17fe317de4c0b8616ccb4ae669224559d38c8c2
+  input_dim: 35
+  context_dim: 5
+  hidden: 8
+  class_names:
+  - metal_submarine
+  - plastic_submarine
+  - plastic_fish
+  - real_fish
+  engineering_seed: 2026
+  variants:
+  - R0
+  - RC
+  - RCS
+  fallback:
+    rule: missing/invalid polarization falls back to the candidate's OWN frozen P0
+      (delta gated to exactly zero); an unusable gray crop is an explicit input failure,
+      never a silent substitution
+    reasons:
+    - no_valid_s_region
+    - non_finite_polar
+protocol:
+  path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+  sha256: 0831dc29aca1e0e7244d36249a44b740a05f800238c3b2e54dc1a15e82bf8092
+  fold_rule: each frame's capture group belongs to exactly one fold's outer_eval;
+    that fold's models evaluate the frame — never a best fold, no ensemble, no full-data
+    refit
+encoder:
+  path: weights/pretrained/mit_b0.pth
+  sha256: 4af8348c2a802bf76115d34797ff5ce1d9f110bb8593c22d9b66d8bd7fa227fc
+  imgsz: 224
+  pooling: instance_mask weighted mean on the last stage (mask_level_weights)
+  preprocessing_version: v4_band_224_area_linear_v1
+features:
+  crop_padding: 10
+  region_rule: local_partition_interior_band_v1
+  global_feature_definition_version: existing_data_probe_v1
+  local_feature_definition_version: existing_data_probe_v1_local_interior_band_v1
+  global_cache:
+    path: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/upgrade/corrected_features
+    files:
+      cache_binding.json: c23fe408b677bea5b6c3493d26c1f5439fa9115cb2fc59fa28ce7ed770bed876
+      feature_cache.npz: c2fd11bd9d31d5bb0340c7a7ca72eb1d52169cfe1a606aca3f8ab037f54b5919
+      feature_definition.json: e312a1ca513179930e3005fa060456d268eb12b90294da27d57656e0f1046351
+      feature_manifest.json: 7e9dde718b1c19a599f9204c8eb0e85db500843ffbe6e801e0f2a6921a3136eb
+  local_cache:
+    path: analysis/runs/material_polar_residual_v1/polar_local_20261009T013057Z_ec28494d/cache_build/local_features
+    files:
+      cache_binding.json: 7f23498da5af05987fd9cd7fe8c825e980cfc8fdd9114e441b9e5d4a78560c3c
+      feature_cache.npz: 7b7e219eff7dbe57556d809d11416a0ec86261b487d4915e59173b88a1bf8d4c
+      feature_definition.json: 3b7f40bda3f17d8cb3b71fc71f9806dadd0b25dde3d6904d751fbb62042d58bc
+      feature_manifest.json: c2e38e794e5d4f8cda33439cd7260fe2059547d9a5830f029390cb5f2cdb7da0
+p0_models:
+  fold0:
+    checkpoint:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/model_state.pt
+      sha256: 3b5d0b6868bf97ac23f4e7354adf4b5fb8e8c9e7b51eae515e4dfbfbaa886694
+    scaler:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/scaler.json
+      sha256: 701be249b3f1aabb5ae246c72ed843a94e8f3728b27e698393aa951aed438fdd
+    oracle:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/outer_eval_predictions.jsonl
+      sha256: f0a6c789bff8a161ef60d9b56323fac120d5f80c5f08dcdd0bb0da3e6fd5cb26
+  fold1:
+    checkpoint:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/model_state.pt
+      sha256: f72a5f7d74053b62be15c91f35fd36b73c09d1975938a124adfafeaa204c9955
+    scaler:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/scaler.json
+      sha256: fbf3597bf44e650103ee190d970dc08626eb7ad16db2eb028999cc27873e5930
+    oracle:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/outer_eval_predictions.jsonl
+      sha256: 61c30e270c245e11f7657cf9569825ab98c73138a379347b52e7bffe6afb8e9e
+  fold2:
+    checkpoint:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/model_state.pt
+      sha256: 8abba262b21aaffe11ba9ce433748fb03387abdde23fa3e36222eeffbf6e8f2a
+    scaler:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/scaler.json
+      sha256: 7011781806be21812d128a9fc8d39a0dbcd0215df0b7dc699c1d58cce7b50999
+    oracle:
+      path: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/outer_eval_predictions.jsonl
+      sha256: 11884c9e93c46d28efcc1c499afe51c499fb347ddce5fa6fa079ba8197e36505
+residual_models:
+  seed_2026:
+    fold0:
+      RCS:
+        residual_state:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/residual_state.pt
+          sha256: 222fb0fa1502b56561a83d67249b3d9716f47854cbb0087bead17fd52beaeafc
+        scaler:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/scaler.json
+          sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/outer_eval_predictions.jsonl
+          sha256: 04218070955a8c09123cf7eede0ac39b8fbface1f4374b954681e8e29ecf392a
+        fold_variant_report:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/fold_variant_report.json
+          sha256: a9b7e9a51a8330414d7a0361ea426a6021ea5e81fdf6509ff4b46ab2d748acfc
+      RC:
+        residual_state:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/residual_state.pt
+          sha256: c00d08ce87205789b1e0f88fa640c4408f513d8193620c2cea5a79264ac16c4a
+        scaler:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/scaler.json
+          sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/outer_eval_predictions.jsonl
+          sha256: ca712ce486783976115c7cb876c4dd3ff521425dc132b08e6bdacf5f5f75de10
+        fold_variant_report:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/fold_variant_report.json
+          sha256: 74766d6d105dbb8cbe56cb72df3f1a3c8fd6b0eaa3bbcf431dead6eb747ab006
+    fold1:
+      RCS:
+        residual_state:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/residual_state.pt
+          sha256: 1a53171c8ccfb2a0f60ae5a1eaab09c46edb034b96e3e64be9678d487474608d
+        scaler:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/scaler.json
+          sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/outer_eval_predictions.jsonl
+          sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0
+        fold_variant_report:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/fold_variant_report.json
+          sha256: 1339d0fb4b2532a712ba6f3d88acc9f9c2785de4dda0135836b6025b232dcb12
+      RC:
+        residual_state:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/residual_state.pt
+          sha256: 179ee8b50c24589858825e1bfa05504307477a39335fdb39c81509908384be49
+        scaler:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/scaler.json
+          sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/outer_eval_predictions.jsonl
+          sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0
+        fold_variant_report:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/fold_variant_report.json
+          sha256: 40beccf5eb7162abcac082c508e0d6cbf03eee7a72deadcbbfa1faf8c0f19ee9
+    fold2:
+      RCS:
+        residual_state:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/residual_state.pt
+          sha256: 566f9c67659f10d38849fd736f53e008f2edad32934f2c2578b135672131b7fe
+        scaler:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/scaler.json
+          sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/outer_eval_predictions.jsonl
+          sha256: 49d82b90d4db265cb7e6ebdb02b77e04482eb7c2ab8ca86179924091657692a6
+        fold_variant_report:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/fold_variant_report.json
+          sha256: 6ed2d78b225175cedd0375c590a716c10ade27fbae99db9f6287edf9ecd9fdc8
+      RC:
+        residual_state:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/residual_state.pt
+          sha256: 9e1bcb69c6736acb2a0361d4e1eb03253dbc5b623c5c73808dd902fddd33b2ef
+        scaler:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/scaler.json
+          sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/outer_eval_predictions.jsonl
+          sha256: 627c43ed2cf3f447856c55ceadc454dc9ebe7e35e47c2be327497a95666f52ac
+        fold_variant_report:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/fold_variant_report.json
+          sha256: b6a362c6a8b6afe472b9ecabeec48723a982a813c4e44677920cca13ed94ff32
+  seed_2027:
+    fold0:
+      RCS:
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RCS/outer_eval_predictions.jsonl
+          sha256: afe5ae67cd253e342d35da31481bd1634610cecebf21d841f9a418ad0a9e122f
+    fold1:
+      RCS:
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RCS/outer_eval_predictions.jsonl
+          sha256: 7f93572592d5cac1f9a161d7186aaf9825d8214d7965bcccf4f41532996398e0
+    fold2:
+      RCS:
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RCS/outer_eval_predictions.jsonl
+          sha256: aa9a1d41d995157e85aef767e686765b747ccf2bc24b8f6fba474f85897fea42
+  seed_2028:
+    fold0:
+      RCS:
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RCS/outer_eval_predictions.jsonl
+          sha256: 0373bd5f38fe5a6c64bf92aad8bbb2308e894f2af054773caa5d452ad1eed05a
+    fold1:
+      RCS:
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RCS/outer_eval_predictions.jsonl
+          sha256: 47f5843de4e1601c6d5404a1254cbc005429a119ff3e82738dd001ff7a770e60
+    fold2:
+      RCS:
+        outer_eval_predictions:
+          path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RCS/outer_eval_predictions.jsonl
+          sha256: eb123f4c80c13c86b6b3852a0b0493465b85778b41a0ab8a54ee0427e67efd8a
+r0_records:
+  fold0:
+    path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/R0/fold0_R0/outer_eval_predictions.jsonl
+    sha256: 0e6a9ccb0439f7346e8368f09c715e01d061067314f91f2c93577f313354869e
+  fold1:
+    path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/R0/fold1_R0/outer_eval_predictions.jsonl
+    sha256: 85021a02d752aafd4bbb75695de84c63e03f9014219e1f21a7e05bb3d5c96c3f
+  fold2:
+    path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/R0/fold2_R0/outer_eval_predictions.jsonl
+    sha256: 672456a33494b480e7cbb4f5db0963b1b4954b5643c4ba08121a5199d4b67f63
+model_a:
+  path: runs/train/yolo26_formal_001/model_a/weights/best.pt
+  sha256: ba049784c8b2a0d90b72ed73f7deb91af327415ac9d1f33c8880f8537e845972
+  task: segment
+  architecture: yolo26n-seg
+  class_names:
+  - target
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  imgsz: 640
+  training_data: datasets/underwater_seg_binary_v2
+  data_independence: unknown
+calibration:
+  file: datasets/bd_image/stereo_calib.npz
+  r_convention: matlab
+  baseline: 0.09890970798524992
+  focal_length: 3643.5231322766995
+  rectification:
+    enabled: true
+    already_rectified_frames: false
+stereo:
+  matcher: sgbm
+  mode: 3way
+  scale: 0.25
+  max_disp: 768
+  block_size: 7
+  uniqueness_ratio: 10
+  speckle_window: 100
+  speckle_range: 32
+  texture_threshold: 10.0
+  lr_check_threshold_px: 2.0
+  min_valid_ratio: 0.05
+  band_margin: 20
+  full_image_threshold: 0.9
+polarization:
+  formula: signed_q=(L-gain*warp(R))/(L+gain*warp(R)+epsilon); abs_q=|signed_q|
+  gain: 1.0
+  epsilon: 1.0e-06
+  min_intensity_sum: 10.0
+runtime:
+  device: '0'
+  precision: float32
+  classification_batch: 8
+  head_device: cpu
+  class_names:
+  - metal_submarine
+  - plastic_submarine
+  - plastic_fish
+  - real_fish
+data_identity:
+  training_data_root: datasets/underwater_cls_fusion_v5_instance_mask
+  training_data_fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  training_parent_data_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+  runtime_data_root: ''
+  runtime_data_fingerprint: ''
+tolerances:
+  g_feature_atol: 0.0001
+  g_feature_rtol: 0.0001
+  c_s_atol: 0.0
+  logit_atol: 0.0001
+  prediction_rule: exact
+benchmark:
+  frame_count: 12
+  selection: evenly spread unique val frames in sorted manifest order, frozen before
+    any model output exists
+  warmup_per_frame: 2
+  measured_per_frame: 5
+  budget_minutes: 15
+  scenario_targets:
+  - 0
+  - 1
+  - 2
+  - 5
+  note: offline replay of preloaded already-rectified frames; NOT a camera-to-GUI
+    claim; incomplete timing is reported PARTIAL and never extrapolated to 20-30 FPS
+candidates:
+- candidate_id: R0
+  family: p0
+  variant: R0
+  seed: null
+  input_dim: 270
+  files: {}
+  note: the shared frozen P0 gray baseline; every correction candidate falls back
+    to exactly this model when S is missing
+- candidate_id: linear_local_RC_s2026
+  family: linear_local
+  variant: RC
+  seed: 2026
+  input_dim: 30
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RC/residual_state.pt
+        sha256: e645c87385ee04a5c7d06c44c9ae8c721402620f0e329c93d2a4bf2ae7c7686e
+      scaler:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RC/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RC/outer_eval_predictions.jsonl
+        sha256: ab912932f06ad79dc2f65898343e7266fe84cae56944e0bb2566f7f9ca6c3408
+      fold_variant_report:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RC/fold_variant_report.json
+        sha256: 37f86f92d35546bf83eb1ce1090d2bae8e7df86a27ff79b2d1eb4e70a605a393
+    fold1:
+      residual_state:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RC/residual_state.pt
+        sha256: 8237c0a21426ea257f1000563d6bfc442663e194962beb47a626bd5141d0f6db
+      scaler:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RC/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RC/outer_eval_predictions.jsonl
+        sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0
+      fold_variant_report:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RC/fold_variant_report.json
+        sha256: 6bb72ace07395ee99acbc738c46916a40184db73b06461cc2d5de04820e62f2f
+    fold2:
+      residual_state:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RC/residual_state.pt
+        sha256: 852ab52c78505e2e786ad7d7d360f23f2e4c73ff869f4023c0fc7cfa67fc74c8
+      scaler:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RC/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RC/outer_eval_predictions.jsonl
+        sha256: 0dc4ffefe34c87913a5be818229d83febdc4066cf768e9436177d895b053d4b0
+      fold_variant_report:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RC/fold_variant_report.json
+        sha256: 6000d04c4fe9c2261c0423d18cf03c6f6f49c7ac575e7544d7a0a9b92d65a9bf
+- candidate_id: linear_local_RCS_s2026
+  family: linear_local
+  variant: RCS
+  seed: 2026
+  input_dim: 30
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RCS/residual_state.pt
+        sha256: 9449baa22ecc1275b97cecaf7bf281c16f28ba14e51e3eb1c9bc7b553191235d
+      scaler:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RCS/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RCS/outer_eval_predictions.jsonl
+        sha256: ef0a6eca9f671f90a73e4e559d4d31f7a12ba65779e03d7b7270b3ebcbe8ba69
+      fold_variant_report:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold0_RCS/fold_variant_report.json
+        sha256: a3811aa7eb10a1f32d0af4a451317cde5e6ffcf81e1d054335e80f593404debd
+    fold1:
+      residual_state:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RCS/residual_state.pt
+        sha256: cfbd289cfbde41d1ce03765750345a73e02d08047da8ce1de95fd3996bb5ac94
+      scaler:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RCS/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RCS/outer_eval_predictions.jsonl
+        sha256: 732b7b726a8bb469bf0330cded4c4410d794784b5b1bf8df33afcb9d0533c7c5
+      fold_variant_report:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold1_RCS/fold_variant_report.json
+        sha256: fe5ce069c758b17adc17d1b33a76c5c56e3c654d97765bd90d615bcef8580c94
+    fold2:
+      residual_state:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RCS/residual_state.pt
+        sha256: c5e7d2c8784afc52ff403aa5d28e7af8d1eef04216dc0fd8207269409eb50542
+      scaler:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RCS/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RCS/outer_eval_predictions.jsonl
+        sha256: da8acd86c8d8eba7772f92d8a355f42aae627eda84820247636d2bcda7994ebe
+      fold_variant_report:
+        path: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/models/fold2_RCS/fold_variant_report.json
+        sha256: ff7ff548e4ee8ff8dff41f1465fadc724226379dd3e87719d7a4d43bc9da8e81
+- candidate_id: conditional_RC_s2026
+  family: conditional
+  variant: RC
+  seed: 2026
+  input_dim: 35
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/residual_state.pt
+        sha256: c00d08ce87205789b1e0f88fa640c4408f513d8193620c2cea5a79264ac16c4a
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/outer_eval_predictions.jsonl
+        sha256: ca712ce486783976115c7cb876c4dd3ff521425dc132b08e6bdacf5f5f75de10
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RC/fold_variant_report.json
+        sha256: 74766d6d105dbb8cbe56cb72df3f1a3c8fd6b0eaa3bbcf431dead6eb747ab006
+    fold1:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/residual_state.pt
+        sha256: 179ee8b50c24589858825e1bfa05504307477a39335fdb39c81509908384be49
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/outer_eval_predictions.jsonl
+        sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RC/fold_variant_report.json
+        sha256: 40beccf5eb7162abcac082c508e0d6cbf03eee7a72deadcbbfa1faf8c0f19ee9
+    fold2:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/residual_state.pt
+        sha256: 9e1bcb69c6736acb2a0361d4e1eb03253dbc5b623c5c73808dd902fddd33b2ef
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/outer_eval_predictions.jsonl
+        sha256: 627c43ed2cf3f447856c55ceadc454dc9ebe7e35e47c2be327497a95666f52ac
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RC/fold_variant_report.json
+        sha256: b6a362c6a8b6afe472b9ecabeec48723a982a813c4e44677920cca13ed94ff32
+- candidate_id: conditional_RCS_s2026
+  family: conditional
+  variant: RCS
+  seed: 2026
+  input_dim: 35
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/residual_state.pt
+        sha256: 222fb0fa1502b56561a83d67249b3d9716f47854cbb0087bead17fd52beaeafc
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/outer_eval_predictions.jsonl
+        sha256: 04218070955a8c09123cf7eede0ac39b8fbface1f4374b954681e8e29ecf392a
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold0_RCS/fold_variant_report.json
+        sha256: a9b7e9a51a8330414d7a0361ea426a6021ea5e81fdf6509ff4b46ab2d748acfc
+    fold1:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/residual_state.pt
+        sha256: 1a53171c8ccfb2a0f60ae5a1eaab09c46edb034b96e3e64be9678d487474608d
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/outer_eval_predictions.jsonl
+        sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold1_RCS/fold_variant_report.json
+        sha256: 1339d0fb4b2532a712ba6f3d88acc9f9c2785de4dda0135836b6025b232dcb12
+    fold2:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/residual_state.pt
+        sha256: 566f9c67659f10d38849fd736f53e008f2edad32934f2c2578b135672131b7fe
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/outer_eval_predictions.jsonl
+        sha256: 49d82b90d4db265cb7e6ebdb02b77e04482eb7c2ab8ca86179924091657692a6
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2026/fold2_RCS/fold_variant_report.json
+        sha256: 6ed2d78b225175cedd0375c590a716c10ade27fbae99db9f6287edf9ecd9fdc8
+- candidate_id: conditional_RC_s2027
+  family: conditional
+  variant: RC
+  seed: 2027
+  input_dim: 35
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RC/residual_state.pt
+        sha256: d075c37d2bb1462dc84af9e7b873dd431adfb501ab6a1cb48f8e4055e5d642f0
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RC/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RC/outer_eval_predictions.jsonl
+        sha256: 8273063bdc802bdf51e9d75e4eb6da1644e56c60937fcbf99531193dddc39be6
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RC/fold_variant_report.json
+        sha256: 7c90b1f5e629431cfbc7cbb3499cf5073792ff645e5098f1f6a16d0fcc5b4d35
+    fold1:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RC/residual_state.pt
+        sha256: cc8ef39b7fb4a4b6513282621319b814e03018ebd24788c34a261a10211d839e
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RC/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RC/outer_eval_predictions.jsonl
+        sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RC/fold_variant_report.json
+        sha256: 338b3718871f78e2f78a450d3d848f95f4201552620f9c30eb916440498859a5
+    fold2:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RC/residual_state.pt
+        sha256: 88e166b25b180dbbd5dd186257b882685429c513fd3e24615a7aa0a77c726393
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RC/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RC/outer_eval_predictions.jsonl
+        sha256: 6ac1a9c6a6d1a14920e3c014e9fc90faf3d15c0e2991849c629f13f9c2d4cacb
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RC/fold_variant_report.json
+        sha256: 6d77d69ce3221c064d210b11a2b45e51cef906321978106161f73be8facd5b76
+- candidate_id: conditional_RCS_s2027
+  family: conditional
+  variant: RCS
+  seed: 2027
+  input_dim: 35
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RCS/residual_state.pt
+        sha256: 46c2e7d82073cf2cbbc0e069c5c646b86d3718b797932d4a50b998a01a10757e
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RCS/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RCS/outer_eval_predictions.jsonl
+        sha256: afe5ae67cd253e342d35da31481bd1634610cecebf21d841f9a418ad0a9e122f
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold0_RCS/fold_variant_report.json
+        sha256: c943d730edb4fd93a5ca2590a71f1543672d2e138f477a610abf0287595b7507
+    fold1:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RCS/residual_state.pt
+        sha256: fe02a333ab901c711e38da66cd5297be6800d00da055af66d53119f69965de41
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RCS/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RCS/outer_eval_predictions.jsonl
+        sha256: 7f93572592d5cac1f9a161d7186aaf9825d8214d7965bcccf4f41532996398e0
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold1_RCS/fold_variant_report.json
+        sha256: 5111402425c04e476dd5d6e9dcb288c488d86568efb8ac02f863a11f877adfd8
+    fold2:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RCS/residual_state.pt
+        sha256: b69ca54a280d2122f363e12652ce95013f15cd85990d891069c6964d114535b0
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RCS/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RCS/outer_eval_predictions.jsonl
+        sha256: aa9a1d41d995157e85aef767e686765b747ccf2bc24b8f6fba474f85897fea42
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2027/fold2_RCS/fold_variant_report.json
+        sha256: cfb99e780dcc44f7cdde7454654c8984b84121c8b2a712e520e479e90ca0adb6
+- candidate_id: conditional_RC_s2028
+  family: conditional
+  variant: RC
+  seed: 2028
+  input_dim: 35
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RC/residual_state.pt
+        sha256: e73ebff59b9c6333f605e13503c765f0259fae150564e9838ad51947879e6afa
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RC/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RC/outer_eval_predictions.jsonl
+        sha256: 30a8e954f517fe0bcb7cfa94a380fefc01e01bb8f1ce9cdbf6d42bd77cc7a4ec
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RC/fold_variant_report.json
+        sha256: 1b01d3e8075eb2a79adb3e841b026a8f50294042c0272738a4e0bbf55e492ad4
+    fold1:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RC/residual_state.pt
+        sha256: ae1a88501f32aa718ec717415f203609a365ca30d21451da9c250fc12b0f7a69
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RC/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RC/outer_eval_predictions.jsonl
+        sha256: 50d280261cb961b909950a6a2ed557feab7f105177a6e1905fab58e74e83dde0
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RC/fold_variant_report.json
+        sha256: 18989a50b33502f5359f622d1b08db2f12c29c97906ef9c1eab54e590ccf4aac
+    fold2:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RC/residual_state.pt
+        sha256: 4f220cf00c0643e55682172e5dcf157ad7e28195815a5763555d5fc9a15693f1
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RC/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RC/outer_eval_predictions.jsonl
+        sha256: 25282897adfc8b2da5eaf8fe33ff8c5c4b7684b79e9254f5b8f03dfb6c90060c
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RC/fold_variant_report.json
+        sha256: 25f29c19cc93e2afccaa32616bcc69199d4ebf67f46c21116085f5654eac9f57
+- candidate_id: conditional_RCS_s2028
+  family: conditional
+  variant: RCS
+  seed: 2028
+  input_dim: 35
+  files:
+    fold0:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RCS/residual_state.pt
+        sha256: ccd419ff1f8c81592d16588aebeb2e12e947c6673d41b526debc82d108dff19c
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RCS/scaler.json
+        sha256: 6fc46fc07c2ccbc6a1e28f4a569d0816fc92bf63cb732d268d1593a8dfc39bca
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RCS/outer_eval_predictions.jsonl
+        sha256: 0373bd5f38fe5a6c64bf92aad8bbb2308e894f2af054773caa5d452ad1eed05a
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold0_RCS/fold_variant_report.json
+        sha256: fa71dd3c6435d79cf3d0c8026cbee6a7ae4492f9e66aaf157fe43625d38b9741
+    fold1:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RCS/residual_state.pt
+        sha256: 1119b3c247751e065a180e07c3ca5e69e4fd8790dcec375709f533a70d589a64
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RCS/scaler.json
+        sha256: da8672b0bd0bfe99e3c94ef51a07ae6ca7facb2fb92cc7fe3fc6f39624c66d1d
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RCS/outer_eval_predictions.jsonl
+        sha256: 47f5843de4e1601c6d5404a1254cbc005429a119ff3e82738dd001ff7a770e60
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold1_RCS/fold_variant_report.json
+        sha256: 03ca0de7173d9e711523fc117f814cbdfd80201705496d7c497c1df947a07c0f
+    fold2:
+      residual_state:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RCS/residual_state.pt
+        sha256: f2fd489e750ee051214135efa23c994f80ecdb97528dae08f4a58eb7bd1a6164
+      scaler:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RCS/scaler.json
+        sha256: ba3b2d57a031b6954e3adfda2a79d4a76756da507957e7e8bf3792253350cd35
+      saved_predictions:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RCS/outer_eval_predictions.jsonl
+        sha256: eb123f4c80c13c86b6b3852a0b0493465b85778b41a0ab8a54ee0427e67efd8a
+      fold_variant_report:
+        path: analysis/runs/material_conditional_residual_v1/manual_20261009T185911/models/seed_2028/fold2_RCS/fold_variant_report.json
+        sha256: 6983d5b6ad0509304af2fd7f0941044d000a1daa30e6260930a87881c9373ad0
+candidate_digest_provenance: all candidate file sha256 digests were computed and frozen
+  at the start of the completion batch (2026-10-09), BEFORE any new evaluation result
+  existed. The fit artifacts carry no digest manifest of their own; the training-time
+  identity anchors are the fit summaries (this config pins the conditional fit summary
+  and the frozen linear reference summary 22ff7a81d51a7cfe92658130f021fdf45e46e292e71d1bfa00a46020988fd5a4).
+linear_reference:
+  fit_summary: analysis/runs/material_polar_local_interior_band_v1/manual_20261009T135646/summary.json
+  sha256: 22ff7a81d51a7cfe92658130f021fdf45e46e292e71d1bfa00a46020988fd5a4
+  note: the frozen linear-local reference identity (training-time record, already
+    enforced by the conditional fit admission)
+candidate_matrix_note: 'the 9 candidates are FIXED: R0 plus linear_local RC/RCS s2026
+  plus conditional RC/RCS s2026/2027/2028. No best-fold routing, no seed picking,
+  no ensemble, no full-data refit, no GT-class routing.'
+evaluation_budget:
+  whole_run_minutes: 30
+  policy: the complete Layer A + gated Layer B evaluation shares one wall budget;
+    on exhaustion the status is PARTIAL with a nonzero exit — no per-stage reset,
+    no retry in place
+detection_reference: analysis/runs/material_residual_runtime_v1/residrt_20261009T112126Z_a992ef51/evaluate_20261009T122430Z/frames.jsonl

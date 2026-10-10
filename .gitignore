@@ -20,6 +20,10 @@ datasets/
 /analysis/runs/material_mask_a1_fix_*/
 # 4A material runtime integration evidence (bounded verification reports)
 /analysis/runs/material_runtime_v2_mask/
+# Existing-data diagnostics round: protocol, detection, feature cache, logs
+/analysis/runs/material_existing_data_v1/
+# Polar-residual experiment evidence (dry-run, fit, shuffle diagnostics)
+/analysis/runs/material_polar_residual_v1/
 # Guard-round validation logs (retained for review, never committed)
 /analysis/runs/material_guard_fix_*/
 archives/*.zip
@@ -44,6 +48,11 @@ venv/
 # Test scratch space
 tests/_tmp*/
 .test_artifacts/
+
+# Experiment evidence trees (reports, run logs, evaluation outputs)
+/analysis/runs/material_residual_runtime_v1/
+/analysis/runs/material_conditional_residual_v1/
+/analysis/runs/material_polar_local_interior_band_v1/
 
 # Local agent runtime state
 .claude/

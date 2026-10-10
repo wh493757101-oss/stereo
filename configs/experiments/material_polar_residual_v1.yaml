@@ -1,0 +1,135 @@
+# material_polar_residual_v1 — 固定灰度基线，验证偏振增量（残差修正协议）
+#
+# 前置状态（全部已落盘并经基线核验入口复算一致）：
+#   - 协议：material_existing_data_v1（0de5cf8a6d373eae…，原三折成员不变）
+#   - 缓存：20260930T045500Z_c5d9e8/upgrade/corrected_features（绑定
+#     cache_binding.json；字节与 20260930T021500Z_a3f7c1 原始缓存一致）
+#   - P0 基线：manual_20261008_085510_822/fit（用户已完成的三折拟合，
+#     verify_p0_baseline.py 逐折复算一致）
+#
+# 本配置只冻结协议与判定，不改变 material_existing_data_v1.yaml，不做任何
+# 模型选择或调参。训练由用户手动执行（Agent 禁止 --fit）。
+#
+# 诚实边界：以下门槛是后续探索的工程推进标准，不是统计显著性检验，
+# 也不构成独立泛化或偏振收益证明。未达门槛不得自动调整门槛或参数重跑。
+
+experiment: material_polar_residual_v1
+protocol_source:
+  path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+  sha256_recorded: 0de5cf8a6d373eaea441488e2d787345cb6d5c34cab225d3e5aed7114b1cf36b
+features_source:
+  path: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/upgrade/corrected_features
+  # 逐文件 SHA256 见 cache_binding.json 与基线核验报告；训练入口沿用
+  # verify_cache_binding 的逐字节复核，不在本配置中重复维护一份副本。
+p0_baseline_source:
+  fit_dir: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit
+  # v3 verification (fold-set identity, full-history integrity, three-way
+  # selection metrics, scaler full-column, in-memory pooled)
+  verification: analysis/runs/material_existing_data_v1/20261008T140000Z_a9b8c7/baseline_v3/p0_baseline_verification.json
+  # superseded evidence (kept for traceability, read-only):
+  #   analysis/runs/material_existing_data_v1/20261008T093000Z_f4b1a7/baseline/
+  #   analysis/runs/material_existing_data_v1/20261008T120000Z_c8d2e6/baseline_v2/
+
+data:
+  root: datasets/underwater_cls_fusion_v5_instance_mask
+  fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+  dev_pool_splits: [train, val]
+  excluded_splits: [test]
+
+# ---- 冻结不变量（与 material_existing_data_v1 完全一致，不得改动）----
+frozen:
+  folds: "原三折成员与角色（protocol.json 的 folds 节），一个样本也不改"
+  slot_layout: "G=256（MiT-B0 最后一级 mask 池化），C=6，S=8；P0 头输入 270 维"
+  slot_C_keys: [quality_valid_ratio, quality_in_bounds_ratio,
+                quality_brightness_valid_ratio, gray_mean_in_instance_mask,
+                gray_std_in_instance_mask, s_region_nonempty_flag]
+  slot_S_keys: [signed_q_mean, signed_q_std_ddof0, signed_q_p10,
+                signed_q_p25, signed_q_p50, signed_q_p75, signed_q_p90,
+                abs_q_mean]
+  preprocessing_version: v4_band_224_area_linear_v1
+  imgsz: 224
+  feature_definition_version: existing_data_probe_v1
+  P0_scope: "P0 编码器特征（缓存只读）、线性分类头、scaler 全部冻结；不解冻、不重训、不 refit"
+  scaler_rule: "每折使用该折已保存的 scaler（inner_train 拟合，S 列仅有效行）；禁止重新拟合"
+  missing_s: "无效 S 样本：RC 与 RCS 都精确回退 P0（修正项恒为 0）"
+
+# ---- 残差修正变体 ----
+variants:
+  R0:  "P0 原样（对照）：final_logits = P0_logits"
+  RC:  "P0 + C 修正：修正头只读 14 维槽的 C 段，S 段输入置零"
+  RCS: "P0 + C、S 修正：修正头读全部 14 维 C+S 槽"
+
+residual_head:
+  input_slots: "与 P0 相同的 14 维 C/S 标准化槽（每折该折 scaler 变换后的值）"
+  input_dim: 14
+  definition: "delta = valid_s * 0.5 * tanh(W x)"
+  W: "14 -> 4 线性层，无 bias，零初始化（epoch 0 时 delta 恒为 0）"
+  gating: "valid_s 乘子（0/1，来自缓存 s_valid 行），无学习型门控"
+  hidden_layers: none
+  unfreeze_P0: false
+  final_logits: "P0_logits + delta"
+
+training:
+  device: cpu
+  full_batch: true
+  epochs: 200
+  optimizer: adamw
+  lr: 0.01
+  weight_decay: 0.001
+  loss: "CE(final_logits, label) + 0.01 * mean(delta^2)"
+  aux_loss_weight: 0.01
+  seed: 2026
+  augmentation: none
+  class_weights: none
+  lr_search: none
+  epoch0_candidate: true    # “不修正”恒为候选，且因 delta=0 与 P0 精确一致
+  selection:
+    primary: inner_val_macro_f1
+    secondary: inner_val_accuracy
+    tie_break: earlier_epoch   # 与 P0 相同规则；outer_eval 不进入训练或选模
+  refit_on_full_data: false
+
+standardization:
+  scope: per_fold_inner_train_only
+  s_columns_valid_rows: inner_train_has_valid_s_only
+  refit: false    # 只能重新计算与 P0 相同的标准化（同数据同规则 => 数值相同），实现上直接复用已保存 scaler
+
+evaluation:
+  outer_eval: "checkpoint 冻结后只评一次"
+  report:
+    deltas: [RCS_minus_R0, RCS_minus_RC]
+    metrics: "三折平均 Macro-F1 与合并外层预测 Macro-F1 分列，不混用"
+    fixed_broken: "各折、各类、各采集组的改对/改错"
+    recalls: [plastic_submarine, plastic_fish, real_fish]
+    direction_analysis: "修正方向、幅度与固定类别偏置迹象（逐类平均 delta）"
+
+# ---- 预先冻结的工程推进门槛（不是显著性检验）----
+acceptance_thresholds:
+  1: "RCS 三折平均 Macro-F1 同时高于 R0 与 RC"
+  2: "至少两折相对两种对照（R0、RC）均不下降"
+  3: "最差折相对任一对照的 Macro-F1 下降不超过 1 个百分点"
+  4: "合并外层预测后相对两种对照均净改对（fixed > broke）"
+  5: "各类合并召回相对任一对照下降不超过 1 个百分点"
+  6: "至少两个采集组出现相对 R0 的净改对，并报告收益集中程度"
+  note: "门槛未全部满足时如实报告，不得调门槛、调参或选择性重跑"
+
+# ---- 偏振内容诊断（打乱）协议 ----
+shuffle_diagnostic:
+  seeds: [2026, 2027, 2028, 2029, 2030]
+  scope: "只交换有效 S 值；接收方 G/C 与缺失状态（s_valid）保持不变"
+  donor_matching:
+    frozen_before_training: true
+    features: "按训练组估计的 valid_ratio、gray_mean 三分位区间分箱"
+    rule: "各 split 内、有效样本箱内构建无自身对应的置换；单元素箱记为未匹配"
+  report:
+    coverage: "逐种子的 donor 覆盖率与 donor 同采集组比例"
+    per_sample: "保留所有种子、donor 与逐样本结果"
+  interpretation: "打乱下降不得单独解释为材质因果贡献"
+
+guards:
+  refuse_fit_without_explicit_mode: true
+  refuse_existing_output_dir: true
+  refuse_mismatched_protocol_or_cache: true
+  outer_eval_isolation: "outer_eval 行索引只在外层评估读取，不进入训练循环/损失/选模"
+  no_training_by_agent: "Agent 仅实现入口与测试；--fit 由用户手动执行"
