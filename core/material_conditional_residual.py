@@ -89,19 +89,38 @@ def build_conditional_head(*, seed: int, input_dim: int,
     return head
 
 
-def conditional_delta(head, x, valid_s):
-    """``delta = valid_s * 0.5 * tanh(head(x))``; invalid rows are 0."""
+def _check_magnitude(magnitude: float) -> float:
+    """Validate the correction magnitude ``a_f`` (finite and > 0).
+
+    The frozen production value is 0.5; ``material_residual_scale_v1``
+    passes ``0.5 * s_f`` for its scaled arm. Existing callers that omit
+    the parameter keep the bitwise-original behavior.
+    """
+    value = float(magnitude)
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError(
+            f"correction magnitude must be finite and > 0, got {magnitude!r}")
+    return value
+
+
+def conditional_delta(head, x, valid_s, magnitude: float = 0.5):
+    """``delta = valid_s * a_f * tanh(head(x))``; invalid rows are 0.
+
+    ``a_f`` defaults to the frozen production magnitude 0.5 so existing
+    callers are unchanged; the scale experiment passes its arm magnitude.
+    """
     import torch
 
-    correction = 0.5 * torch.tanh(head(x))
+    value = _check_magnitude(magnitude)
+    correction = value * torch.tanh(head(x))
     return valid_s.to(correction.dtype).unsqueeze(1) * correction
 
 
-def conditional_logits(head, x, valid_s, p0_logits):
+def conditional_logits(head, x, valid_s, p0_logits, magnitude: float = 0.5):
     """``final = P0_logits + delta`` (P0 stays a detached constant)."""
     import torch
 
-    return p0_logits + conditional_delta(head, x, valid_s)
+    return p0_logits + conditional_delta(head, x, valid_s, magnitude)
 
 
 def assemble_conditional_inputs(c_features: np.ndarray,
@@ -159,13 +178,17 @@ def train_conditional_residual_head(
     aux_loss_weight: float = DEFAULT_AUX_LOSS_WEIGHT,
     input_dim: int,
     hidden: int = DEFAULT_HIDDEN,
+    magnitude: float = 0.5,
 ):
     """The frozen full-batch loop with the conditional head.
 
     Identical contract to ``core.material_residual.train_residual_head``:
     train/val tensors only (there is no outer_eval parameter), epoch 0 is
     the untrained candidate, selection is inner_val Macro-F1 > accuracy >
-    earlier epoch, and the loss is ``CE + aux * mean(delta^2)``.
+    earlier epoch, and the loss is ``CE + aux * mean(delta^2)``. The
+    correction magnitude ``a_f`` defaults to the frozen 0.5; the scale
+    experiment passes its arm magnitude (the ONLY difference between the
+    two arms — identical head, seed, init, data and budget).
     """
     import torch
     from torch.nn import functional as F
@@ -215,8 +238,8 @@ def train_conditional_residual_head(
     def _val_entry(epoch: int, train_loss: float | None) -> dict:
         with torch.no_grad():
             final = conditional_logits(model, x_val_t, valid_val_t,
-                                       p0_val_t)
-            delta = conditional_delta(model, x_val_t, valid_val_t)
+                                       p0_val_t, magnitude)
+            delta = conditional_delta(model, x_val_t, valid_val_t, magnitude)
         predictions = [int(v) for v in final.numpy().argmax(axis=1)]
         return {
             "epoch": epoch,
@@ -233,8 +256,8 @@ def train_conditional_residual_head(
         model.train()
         optimizer.zero_grad()
         final = conditional_logits(model, x_train_t, valid_train_t,
-                                   p0_train_t)
-        delta = conditional_delta(model, x_train_t, valid_train_t)
+                                   p0_train_t, magnitude)
+        delta = conditional_delta(model, x_train_t, valid_train_t, magnitude)
         loss = F.cross_entropy(final, y_train_t) + aux * delta.pow(2).mean()
         loss.backward()
         optimizer.step()

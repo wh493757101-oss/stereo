@@ -584,9 +584,11 @@ class TestComputeBands:
 
     def test_bands_are_effectively_disjoint_no_double_coverage(self):
         # Overlapping input bands must not run SGBM twice on shared rows.
+        # (The internal low-resolution match lives in _match_core since the
+        # batch-2 core/assemble split; _match_pair is a compat wrapper.)
         left, right = make_textured_pair(512, 256, disparity=128)
         calls = []
-        original = StereoMatcher._match_pair
+        original = StereoMatcher._match_core
 
         def spy(self, left_img, right_img):
             calls.append(left_img.shape)
@@ -594,7 +596,7 @@ class TestComputeBands:
 
         import core.stereo_matching as sm
 
-        with unittest.mock.patch.object(sm.StereoMatcher, "_match_pair", spy):
+        with unittest.mock.patch.object(sm.StereoMatcher, "_match_core", spy):
             result = default_matcher().compute_bands(
                 left, right, [HorizontalBand(0, 100), HorizontalBand(50, 160)]
             )

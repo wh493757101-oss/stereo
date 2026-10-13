@@ -62,3 +62,20 @@ tests/_tmp*/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Upsample-impact batch-2 evidence (retained for review, never committed)
+/analysis/runs/material_upsample_impact_v1/
+
+# Residual-scale batch-3 evidence (retained for review, never committed)
+/analysis/runs/material_residual_scale_v1/
+
+/analysis/runs/material_spatial_input_v1/
+
+# Fourth-batch local training and independent-review evidence
+/analysis/runs/material_spatial_classifier_v1/
+
+# Fold-isolated YOLO26 spatial-transfer validation evidence
+/analysis/runs/yolo26_spatial_v1/
+
+# Polar-complementarity diagnostic evidence (retained for review, never committed)
+/analysis/runs/material_polar_complementarity_diagnostic_v1/

@@ -33,6 +33,86 @@ def robust_disparity(disparities: np.ndarray) -> float:
     return float(np.median(values))
 
 
+UPSAMPLE_LEGACY_ZERO_LINEAR_V1 = "legacy_zero_linear_v1"
+UPSAMPLE_VALID_WEIGHTED_LEGACY_SUPPORT_V1 = "valid_weighted_legacy_support_v1"
+UPSAMPLE_VERSIONS = (
+    UPSAMPLE_LEGACY_ZERO_LINEAR_V1,
+    UPSAMPLE_VALID_WEIGHTED_LEGACY_SUPPORT_V1,
+)
+
+
+def upsample_disparity_lowres(disp_small: np.ndarray,
+                              valid_small: np.ndarray,
+                              out_w: int, out_h: int, scale: float,
+                              version: str) -> tuple[np.ndarray, np.ndarray]:
+    """The final low-resolution -> full-resolution disparity upsampling.
+
+    Two explicit versions; anything else is refused:
+
+    - ``legacy_zero_linear_v1``: the original production path, kept bitwise
+      identical — the zero-filled low-res disparity is INTER_LINEAR-
+      upsampled, the valid mask is INTER_NEAREST-upsampled, and the
+      disparity is kept only where the upsampled mask is valid.
+
+    - ``valid_weighted_legacy_support_v1``: the low-resolution SUPPORT is
+      unchanged (``Vn = resize_NEAREST(V) > 0``; the valid domain never
+      extends past the nearest-valid positions), but the disparity at the
+      kept positions is the valid-weight-normalized value::
+
+          N = resize_LINEAR(where(V, d, 0));  W = resize_LINEAR(V.float32)
+          Dstar = N / W / scale   (only where W > 0)
+          Vnew = Vn AND (W > 0) AND isfinite(Dstar) AND (Dstar > 0)
+
+      The numerator masks invalid taps explicitly (it never relies on the
+      caller having already zeroed them), ``W = 0`` positions are never
+      divided, and a non-finite or non-positive value AT a valid
+      low-resolution tap is rejected outright. Invalid output positions
+      are exactly 0. Valid-valid depth discontinuities keep the original
+      interpolation behaviour (this version does not repair them).
+    """
+    if version == UPSAMPLE_LEGACY_ZERO_LINEAR_V1:
+        disp_full = cv2.resize(
+            disp_small, (out_w, out_h), interpolation=cv2.INTER_LINEAR
+        ) / scale
+        valid_full = cv2.resize(
+            valid_small.astype(np.uint8), (out_w, out_h),
+            interpolation=cv2.INTER_NEAREST)
+        disp_full = np.where(valid_full > 0, disp_full, 0.0).astype(np.float32)
+        return disp_full, valid_full
+    if version == UPSAMPLE_VALID_WEIGHTED_LEGACY_SUPPORT_V1:
+        valid = valid_small > 0
+        if valid.any():
+            valid_values = np.asarray(disp_small)[valid]
+            if not np.isfinite(valid_values).all():
+                raise ValueError(
+                    "non-finite value at a valid low-resolution disparity "
+                    "tap; the weighted upsample refuses to propagate it")
+            if (valid_values <= 0).any():
+                raise ValueError(
+                    "non-positive value at a valid low-resolution "
+                    "disparity tap")
+        numerator = cv2.resize(
+            np.where(valid, disp_small, 0.0).astype(np.float32),
+            (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+        weights = cv2.resize(
+            valid.astype(np.float32), (out_w, out_h),
+            interpolation=cv2.INTER_LINEAR)
+        nearest_valid = cv2.resize(
+            valid_small.astype(np.uint8), (out_w, out_h),
+            interpolation=cv2.INTER_NEAREST) > 0
+        has_weight = weights > 0
+        dstar = np.divide(
+            numerator, weights, out=np.zeros_like(numerator),
+            where=has_weight) / scale
+        new_valid = (
+            nearest_valid & has_weight & np.isfinite(dstar) & (dstar > 0))
+        disp_full = np.where(new_valid, dstar, 0.0).astype(np.float32)
+        return disp_full, new_valid.astype(np.uint8)
+    raise ValueError(
+        f"unknown disparity upsample version: {version!r}; expected one "
+        f"of {list(UPSAMPLE_VERSIONS)}")
+
+
 @dataclasses.dataclass(frozen=True)
 class StereoMatcherConfig:
     """Configuration for :class:`StereoMatcher`.
@@ -53,6 +133,7 @@ class StereoMatcherConfig:
     texture_threshold: float = 10.0
     lr_check_threshold_px: float = 2.0
     min_valid_ratio: float = 0.05
+    upsample_version: str = UPSAMPLE_LEGACY_ZERO_LINEAR_V1
 
     def __post_init__(self) -> None:
         if self.matcher != "sgbm":
@@ -69,6 +150,38 @@ class StereoMatcherConfig:
             raise ValueError("lr_check_threshold_px must be non-negative")
         if not 0.0 <= self.min_valid_ratio <= 1.0:
             raise ValueError("min_valid_ratio must be in [0, 1]")
+        if self.upsample_version not in UPSAMPLE_VERSIONS:
+            raise ValueError(
+                f"unknown upsample_version: {self.upsample_version!r}; "
+                f"expected one of {list(UPSAMPLE_VERSIONS)}")
+
+
+@dataclasses.dataclass(frozen=True)
+class LowResCapture:
+    """The low-resolution intermediates of one ``_match_pair`` call.
+
+    A small internal capture interface so the two-arm upsample comparison
+    can prove both arms matched the identical low-resolution core without
+    running SGBM twice. Not a public result type."""
+
+    disp_small: np.ndarray
+    valid_small: np.ndarray
+
+
+@dataclasses.dataclass(frozen=True)
+class LowResCoreRecord:
+    """One low-resolution match core plus the extent it was matched for.
+
+    ``band is None`` marks a full-frame match; otherwise ``(y1, y2)`` is
+    the inclusive-exclusive row range the core was matched on. The capture
+    holds BOTH SGBM passes (left and right view) and the consistency and
+    texture checks — it is the complete low-resolution matching result,
+    before any upsampling."""
+
+    capture: LowResCapture
+    band: tuple[int, int] | None
+    valid_ratio: float
+    elapsed_s: float
 
 
 @dataclasses.dataclass(frozen=True)
@@ -202,6 +315,8 @@ class StereoMatcher:
 
     def __init__(self, config: StereoMatcherConfig | None = None) -> None:
         self.config = config or StereoMatcherConfig()
+        self.last_lowres_cores: list[LowResCapture] = []
+        self.lowres_match_calls = 0
 
     @property
     def num_disparities(self) -> int:
@@ -217,18 +332,8 @@ class StereoMatcher:
         if left_gray.ndim != 2:
             raise ValueError(f"expected single-channel image, got shape {left_gray.shape}")
 
-        h, w = left_gray.shape
-        disparity, valid, elapsed, valid_ratio = self._match_pair(left_gray, right_gray)
-        if valid_ratio < self.config.min_valid_ratio:
-            disparity = np.zeros((h, w), dtype=np.float32)
-            valid = np.zeros((h, w), dtype=np.uint8)
-
-        return StereoMatchResult(
-            disparity=disparity,
-            valid=valid,
-            elapsed_s=elapsed,
-            valid_ratio=valid_ratio,
-        )
+        records = self._match_cores_normalized(left_gray, right_gray, None)
+        return self.assemble_from_cores(records, left_gray.shape)
 
     def compute_bands(
         self,
@@ -265,6 +370,8 @@ class StereoMatcher:
         clipped = merge_horizontal_bands(clipped_bands)
         if not clipped:
             # No target rows: skip SGBM entirely.
+            self.last_lowres_cores = []
+            self.lowres_match_calls = 0
             return StereoMatchResult(
                 disparity=np.zeros((h, w), dtype=np.float32),
                 valid=np.zeros((h, w), dtype=np.uint8),
@@ -276,21 +383,86 @@ class StereoMatcher:
         if coverage >= full_image_threshold * h:
             return self.compute(left_gray, right_gray)
 
+        records = self._match_cores_normalized(left_gray, right_gray, clipped)
+        return self.assemble_from_cores(records, left_gray.shape)
+
+    def _match_pair(
+        self, left_gray: np.ndarray, right_gray: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, float, float]:
+        """Compatibility wrapper: one core plus assembly, returning the
+        full-resolution ``(disparity, valid, elapsed_s, valid_ratio)`` the
+        pre-refactor ``_match_pair`` returned (bitwise identical)."""
+        records = self._match_cores_normalized(left_gray, right_gray, None)
+        result = self.assemble_from_cores(records, left_gray.shape)
+        return result.disparity, result.valid, result.elapsed_s, \
+            result.valid_ratio
+
+    def match_cores(self, left: np.ndarray, right: np.ndarray,
+                    bands: list[HorizontalBand] | None = None,
+                    full_image_threshold: float = 0.9) -> list[LowResCoreRecord]:
+        """Run the low-resolution match ONCE per band (or once for the full
+        frame) and return the cores WITHOUT upsampling.
+
+        Each core contains both SGBM passes (left and right view), the
+        left-right consistency check and the texture filter — the complete
+        low-resolution matching result. Feeding the same cores through
+        :meth:`assemble_from_cores` on two matchers whose configs differ
+        only in ``upsample_version`` guarantees the two arms share one
+        matching pass."""
+        left_gray = to_gray_u8(left)
+        right_gray = to_gray_u8(right)
+        if left_gray.shape != right_gray.shape:
+            raise ValueError(
+                f"left/right shape mismatch: {left_gray.shape} vs {right_gray.shape}"
+            )
+        if left_gray.ndim != 2:
+            raise ValueError(f"expected single-channel image, got shape {left_gray.shape}")
+        if bands is not None and not 0.0 < full_image_threshold <= 1.0:
+            raise ValueError("full_image_threshold must be in (0, 1]")
+        return self._match_cores_normalized(left_gray, right_gray, bands,
+                                            full_image_threshold)
+
+    def assemble_from_cores(self, records: list[LowResCoreRecord],
+                            out_shape: tuple[int, int]) -> StereoMatchResult:
+        """Assemble a full-resolution :class:`StereoMatchResult` from core
+        records, applying the production upsampling version and the
+        unchanged min_valid_ratio policies (per band for band cores, whole
+        frame for a full-frame core). No matching happens here."""
+        h, w = out_shape
+        cfg = self.config
+        if not records:
+            return StereoMatchResult(
+                disparity=np.zeros((h, w), dtype=np.float32),
+                valid=np.zeros((h, w), dtype=np.uint8),
+                elapsed_s=0.0,
+                valid_ratio=0.0,
+            )
+        elapsed = sum(record.elapsed_s for record in records)
+        if records[0].band is None:
+            record = records[0]
+            disp_full, valid_full = upsample_disparity_lowres(
+                record.capture.disp_small, record.capture.valid_small,
+                w, h, cfg.scale, cfg.upsample_version)
+            valid_ratio = record.valid_ratio
+            if valid_ratio < cfg.min_valid_ratio:
+                disp_full = np.zeros((h, w), dtype=np.float32)
+                valid_full = np.zeros((h, w), dtype=np.uint8)
+            return StereoMatchResult(disparity=disp_full, valid=valid_full,
+                                     elapsed_s=elapsed,
+                                     valid_ratio=valid_ratio)
         disparity = np.zeros((h, w), dtype=np.float32)
         valid = np.zeros((h, w), dtype=np.uint8)
-        elapsed = 0.0
         valid_pixels = 0
-        for band in clipped:
-            band_disp, band_valid, band_elapsed, band_ratio = self._match_pair(
-                left_gray[band.y1 : band.y2], right_gray[band.y1 : band.y2]
-            )
-            elapsed += band_elapsed
-            if band_ratio < self.config.min_valid_ratio:
+        for record in records:
+            y1, y2 = record.band
+            band_disp, band_valid = upsample_disparity_lowres(
+                record.capture.disp_small, record.capture.valid_small,
+                w, y2 - y1, cfg.scale, cfg.upsample_version)
+            if record.valid_ratio < cfg.min_valid_ratio:
                 continue
-            disparity[band.y1 : band.y2] = band_disp
-            valid[band.y1 : band.y2] = band_valid
+            disparity[y1:y2] = band_disp
+            valid[y1:y2] = band_valid
             valid_pixels += int(band_valid.sum())
-
         return StereoMatchResult(
             disparity=disparity,
             valid=valid,
@@ -298,15 +470,42 @@ class StereoMatcher:
             valid_ratio=valid_pixels / float(h * w),
         )
 
-    def _match_pair(
-        self, left_gray: np.ndarray, right_gray: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, float, float]:
-        """Core SGBM pipeline on same-shape grayscale images.
+    def _match_cores_normalized(self, left_gray: np.ndarray,
+                                right_gray: np.ndarray,
+                                bands: list[HorizontalBand] | None,
+                                full_image_threshold: float = 0.9
+                                ) -> list[LowResCoreRecord]:
+        self.last_lowres_cores = []
+        self.lowres_match_calls = 0
+        if bands is None:
+            capture, ratio, elapsed = self._match_core(left_gray, right_gray)
+            return [LowResCoreRecord(capture=capture, band=None,
+                                     valid_ratio=ratio, elapsed_s=elapsed)]
+        # production coverage policy: near-full bands fall back to ONE
+        # full-frame core (identical to compute_bands' historical branch)
+        coverage = sum(band.height for band in bands)
+        if coverage >= full_image_threshold * left_gray.shape[0]:
+            capture, ratio, elapsed = self._match_core(left_gray, right_gray)
+            return [LowResCoreRecord(capture=capture, band=None,
+                                     valid_ratio=ratio, elapsed_s=elapsed)]
+        records = []
+        for band in bands:
+            capture, ratio, elapsed = self._match_core(
+                left_gray[band.y1:band.y2], right_gray[band.y1:band.y2])
+            records.append(LowResCoreRecord(
+                capture=capture, band=(int(band.y1), int(band.y2)),
+                valid_ratio=ratio, elapsed_s=elapsed))
+        return records
 
-        Returns ``(disparity, valid, elapsed_s, valid_ratio)`` where the maps
-        are at the input resolution and ``valid_ratio`` is measured over the
-        whole (cropped) input. The caller applies ``min_valid_ratio`` policy.
-        """
+    def _match_core(
+        self, left_gray: np.ndarray, right_gray: np.ndarray
+    ) -> tuple[LowResCapture, float, float]:
+        """One low-resolution match: downscale, CLAHE, both SGBM passes
+        (left and right view), left-right consistency and texture checks.
+
+        Returns ``(capture, valid_ratio, elapsed_s)`` at the low
+        resolution, before any upsampling. ``lowres_match_calls`` counts
+        these invocations; one call covers both underlying SGBM passes."""
         cfg = self.config
         h, w = left_gray.shape
         sw = max(1, int(round(w * cfg.scale)))
@@ -318,7 +517,12 @@ class StereoMatcher:
         if min(sw, sh) < cfg.block_size:
             # Scene too small for the configured block size; report no data
             # instead of crashing (matches legacy behaviour on tiny inputs).
-            return np.zeros((h, w), np.float32), np.zeros((h, w), np.uint8), 0.0, 0.0
+            empty = LowResCapture(
+                disp_small=np.zeros((sh, sw), np.float32),
+                valid_small=np.zeros((sh, sw), np.uint8))
+            self.last_lowres_cores.append(empty)
+            self.lowres_match_calls += 1
+            return empty, 0.0, 0.0
 
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         left_match = clahe.apply(left_small)
@@ -402,16 +606,14 @@ class StereoMatcher:
         valid_small = consistent
         disp_small = np.where(valid_small, disp_l, 0.0).astype(np.float32)
         valid_ratio = float(valid_small.mean())
-
-        disp_full = (
-            cv2.resize(disp_small, (w, h), interpolation=cv2.INTER_LINEAR) / cfg.scale
-        )
-        valid_full = cv2.resize(
-            valid_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST
-        )
-        disp_full = np.where(valid_full > 0, disp_full, 0.0).astype(np.float32)
-
-        return disp_full, valid_full, elapsed, valid_ratio
+        # small internal capture interface: the two-arm upsample comparison
+        # re-uses one SGBM result and must prove the low-resolution core is
+        # shared; no behaviour change
+        capture = LowResCapture(
+            disp_small=disp_small.copy(), valid_small=valid_small.copy())
+        self.last_lowres_cores.append(capture)
+        self.lowres_match_calls += 1
+        return capture, valid_ratio, elapsed
 
     def instance_stats(
         self,

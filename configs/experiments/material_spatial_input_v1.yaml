@@ -1,0 +1,89 @@
+# material_spatial_input_v1 — 零训练空间像素输入准备批（预注册契约）
+#
+# 本配置只冻结来源、契约与预期；matcher 参数、band_margin、
+# full_image_threshold、crop_pad 一律来自冻结旧配置
+# configs/experiments/material_residual_scale_v1.yaml（准入时逐项核对，
+# 不在本文件重复一份可漂移的副本）。本批不训练模型、不拟合 scaler、
+# 不执行分类/编码前向；科学结论保持"尚未建立偏振净收益；路线 C 为当
+# 前审查结论"。
+
+experiment: material_spatial_input_v1
+
+frozen_sources:
+  old_experiment_config:
+    path: configs/experiments/material_residual_scale_v1.yaml
+    sha256: 697bf9f14b5dcd7475ee777bf7b543ce3c11ff6e41adb00fd716919aedcf9a09
+  fix_cache_dir: analysis/runs/material_residual_scale_v1/20261011T074823Z_e36bf75e/cache_build/features
+  fix_cache_files:
+    cache_binding.json:
+      sha256: b009717913c5fa23a1a5294bf7fa66fda3aa13ce9764dcaf35f19dbd1f432872
+    feature_cache.npz:
+      sha256: 7e9c68ea8c9c57d2bd391a0465cbd8ead32450cfa7f8a731b7160e35615f7f15
+    feature_manifest.json:
+      sha256: 4420585f9ecfff0a47cb06d38af76cbedd3750372ca523475879a476492d3ab0
+    feature_definition.json:
+      sha256: bb83cabf56a98228976058bfb7096a6324856c501b6a91ec4e4041dd465546e7
+  build_source_manifest:
+    path: analysis/runs/material_residual_scale_v1/20261011T074823Z_e36bf75e/cache_build/source_manifest.json
+    sha256: c7a4c7dd6cba25a3aad1a6e0e46d10232eb1f8baaf2abf40e7407a00da1ae499
+  protocol:
+    path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+    file_sha256: 0831dc29aca1e0e7244d36249a44b740a05f800238c3b2e54dc1a15e82bf8092
+    internal_digest: 0de5cf8a6d373eaea441488e2d787345cb6d5c34cab225d3e5aed7114b1cf36b
+  v5_data:
+    root: datasets/underwater_cls_fusion_v5_instance_mask
+    fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  pair_manifest:
+    path: datasets/underwater_seg_v2/pair_manifest.csv
+
+dev_pool:
+  splits: [train, val]
+  frames: 945
+  nonempty_frames: 941
+  empty_frames: 4
+  instances: 2446
+  groups: 21
+  s_valid_true: 2341
+  s_valid_false: 105
+  empty_frame_names:
+    - Single_Real_fish_0_NTU_010
+    - Single_Real_fish_0_NTU_011
+    - Single_Real_fish_0_NTU_014
+    - Single_Real_fish_0_NTU_019
+
+grid:
+  schema: area_parts_letterbox128_v1
+  size: 128
+  letterbox: "x0=(128-w')//2 余右；y0=(128-h')//2 余下；补边正零"
+  area_note: "按实际 w'/h' 划分源像素覆盖矩形，源重叠面积归一化平均；s 不作采样边界近似"
+  planes:
+    - L_interior
+    - L_band
+    - R_interior
+    - R_band
+    - q_interior
+    - q_band
+    - coverage_interior
+    - coverage_band
+    - coverage_object
+  frozen:
+    right_gain: 1.0
+    min_intensity_sum: 10.0
+    epsilon: 1.0e-6
+
+permutation:
+  schema: coverage_matched_parts_pcg64_v1
+  content_seed: 2026
+  domain: material_spatial_input_v1
+  seed_rule: "seed64 = SHA256('material_spatial_input_v1|sample_name|region|coverage_bits_hex8|2026') 前 8 字节 little-endian uint64"
+  notes: "仅 D>0 格、按 coverage float32 位模式分组内置换 q；coverage/对象覆盖不动；单格组不变；不重抽；原生 S16 为共同上下文不变"
+
+budgets:
+  smoke_frames_max: 12
+  smoke_minutes: 5
+  build_minutes: 20
+  min_free_gib_before_build: 10
+
+verify:
+  grid_atol: 1.0e-6
+  grid_rtol: 0.0

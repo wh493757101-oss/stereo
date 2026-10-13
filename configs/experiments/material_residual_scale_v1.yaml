@@ -1,0 +1,157 @@
+# material_residual_scale_v1 — 训练侧残差幅度实验（第三批）
+#
+# 问题：在同一份修复版本输入（valid_weighted_legacy_support_v1）、相同
+# 小型条件头与相同训练预算下，把残差幅度与冻结 P0 自身的分数尺度匹配
+# （scaled: a_f = 0.5*s_f），是否比原 ±0.5 上界（fixed: a_f = 0.5）更有
+# 效；新增收益是否超过质量控制信息本身的收益（scaled RCS vs scaled RC）？
+#
+# 固定不变：灰度 P0 及其 scaler/装配链（逐折身份校验，logits atol 1e-4）、
+# C14/S16 定义（local_partition_interior_band_v1）、网络结构
+# Linear(35,8)->SiLU->Linear(8,4,bias=False)（末层零初始化，epoch0 精确
+# 等于 P0）、200 epoch CPU/full-batch AdamW lr=0.01 wd=0.001、
+# CE+0.01*mean(delta²)、inner_val 选模（macro_f1 > accuracy > 更早
+# epoch）、RC/RCS 同 s_valid 门控与缺失精确回退、打乱 v2 复合箱。
+# 两臂唯一设计差异是 a_f；同折同种子所有训练路径共享初始化与 scaler。
+#
+# 本批只做工程验收（preflight/smoke/945帧修复特征重建/真实 dry-run）；
+# 36 次真实拟合（2 臂 × RC/RCS × 3 折 × 3 种子）由用户手动执行。
+# 离线组隔离实验；真实预测 mask 的完整系统验收属于后续批次。
+
+experiment: material_residual_scale_v1
+
+anchors:
+  runtime_config:
+    path: configs/experiments/material_residual_runtime_v1_complete.yaml
+    sha256: 2b63cf30f6b9d76cb0d8641d618e83c406cee8e07dc7e6d1faab71abce212f27
+  protocol_file:
+    # 文件字节 SHA256（协议内部另有自洽摘要 protocol_sha256，二者不同用途）
+    path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+    sha256: 0831dc29aca1e0e7244d36249a44b740a05f800238c3b2e54dc1a15e82bf8092
+  artifact_manifest:
+    path: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/artifact_manifest.json
+    sha256: 1e01a8fdb0af8bb7e413f66eb3992bb40bc982ebeb4b8840156bb74bf0b6776b
+  upsample_impact_config:
+    path: configs/experiments/material_upsample_impact_v1.yaml
+    sha256: 9c5a487edf2d567e5e6b2fe61b0f0efe19a8902288be85674e5da77d9f7998ac
+  batch1_source_manifest:
+    path: analysis/runs/material_residual_runtime_v1/measurement_diagnostic_v1/20261010T145012Z_71caa5a0/source_manifest.json
+    sha256: cf0c1775dda6d25ee1b24bb0ffcb733bc9103f963c63b41c7b37964c00d1605b
+
+protocol_source:
+  path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+  sha256_recorded: 0de5cf8a6d373eaea441488e2d787345cb6d5c34cab225d3e5aed7114b1cf36b
+
+features_source:
+  # 冻结全局缓存：G256 按.sample_name 逐行复制，数组字节不变
+  path: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/upgrade/corrected_features
+
+p0_baseline_source:
+  fit_dir: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit
+  verification: analysis/runs/material_existing_data_v1/20261008T140000Z_a9b8c7/baseline_v3/p0_baseline_verification.json
+
+data:
+  root: datasets/underwater_cls_fusion_v5_instance_mask
+  source_root: datasets/underwater_seg_v2
+  fingerprint: bb9e3661fb1e71e94056893f6dfc50b9e3dee1c604f430ac0727d75362d32982
+  parent_v4_fingerprint: 8db8998d7a4c280064626961e4d51c92c531878ea2e92f0d1480df46379bd334
+  class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+  dev_pool_splits: [train, val]
+  excluded_splits: [test]
+
+fix_inputs:
+  # 本批特征重建唯一批准的上采样版本；正式默认仍为 legacy_zero_linear_v1
+  upsample_version: valid_weighted_legacy_support_v1
+  # 生产 matcher 参数（与冻结运行时配置逐项相等，准入时核对）
+  matcher: sgbm
+  mode: 3way
+  max_disp: 768
+  scale: 0.25
+  block_size: 7
+  uniqueness_ratio: 10
+  speckle_window: 100
+  speckle_range: 32
+  texture_threshold: 10.0
+  lr_check_threshold_px: 2.0
+  min_valid_ratio: 0.05
+  band_margin: 20
+  full_image_threshold: 0.9
+  crop_pad: 10
+
+local_features:
+  region_rule: local_partition_interior_band_v1
+  feature_definition_version: existing_data_probe_v1_local_interior_band_v1
+  definition_note: "C14/S16 统计定义不变；只换偏振输入来源（修复版重算）"
+
+support_expectations:
+  frames: 945
+  instances: 2446
+  groups: 21
+  empty_frames: 4
+  note: "开发池 = 原 train+val（21 组、945 帧、2446 实例、4 个无目标帧）；旧 test 不参与任何计算"
+
+scale_rule:
+  source: p0_logits_inner_train
+  dtype: float64
+  statistic: median
+  margin: "m_i = largest(P0_logits_i) - second_largest(P0_logits_i)"
+  min_scale: 1.0
+  formula: "s_f = max(1.0, median(m_i))"
+  shared_note: "同一折所有种子与变体共享 s_f；不读标签、不使用 inner_val/outer_eval"
+
+arms:
+  fixed:
+    magnitude_factor: 0.5
+    note: "a_f = 0.5（原冻结上界）"
+  scaled:
+    magnitude_factor: 0.5
+    note: "a_f = 0.5 * s_f（与灰度分数尺度匹配）"
+  formula_note: "delta = s_valid * a_f * tanh(head(x)); final = P0_logits + delta; P0 logits 不缩放"
+
+variants:
+  R0: "原样冻结 P0，真正的灰度基线，不训练；输出不依赖 C/S/polar_valid/缺失标记"
+  RC: "C14＋原P0上下文；S16 在输入层精确置零。报告名称：灰度＋质量控制修正（含质量/有效性信息，不得称纯灰度）"
+  RCS: "C14＋S16＋原P0上下文"
+  gating: "RC/RCS 沿用相同 s_valid 门控；缺失偏振时 delta 精确为零，输出精确回退本折原 P0"
+
+head:
+  structure: "Linear(35,8) -> SiLU -> Linear(8,4,bias=False)"
+  hidden: 8
+  last_layer_zero_init: true
+  shared_init_note: "同折同种子的两个幅度臂与 RC/RCS 使用相同初始化"
+
+training:
+  device: cpu
+  full_batch: true
+  epochs: 200
+  optimizer: adamw
+  lr: 0.01
+  weight_decay: 0.001
+  aux_loss_weight: 0.01
+  note: "无增强、无类别加权、无额外调参；标准化只拟合修复缓存 inner_train（C 全行、S 有效单元格），同折四条训练路径共享同一 scaler；P0 用原冻结 scaler 与原装配链"
+
+seeds: [2026, 2027, 2028]
+planned_fits: 36
+
+shuffle:
+  content_seeds: [2026, 2027, 2028, 2029, 2030]
+  binning:
+    columns: [c_valid_ratio_0, c_gray_mean_3]
+    source: "修复缓存 C14 的第 0 列（quality_valid_ratio）与第 3 列（gray_mean_in_instance_mask）"
+    quantiles: [0.3333333333333333, 0.6666666666666666]
+    edge_source: "仅本折 inner_train"
+  composite_bin: "原箱*4 + interior有效*2 + band有效"
+  donor_rules: "同协议角色、同复合箱、偏振可用；不放回、无固定点、不用自身；不跨折、不用旧test、不按GT类别"
+  note: "完整标准化 S16 来自同一 donor；接收方 G/C/P0上下文/尺度/区域缺失模式/s_valid 不变；所有幅度臂与训练种子复用同内容种子的身份映射；单元素箱 unmatched 并保留原输入"
+
+gates:
+  note: "工程推进门槛（全部满足才建议后续实际mask验证），不是独立泛化或统计显著性标准"
+  gate1: "scaled RCS 三折三种子平均 Macro-F1 相对 R0 ≥ +1.0pp，相对同臂 RC ≥ +0.5pp"
+  gate2: "scaled RCS 相对同输入 fixed RCS 平均 Macro-F1 严格提高且成对累计净改对"
+  gate3: "至少两个种子的 scaled RCS 相对 R0 与同臂 RC 均净改对"
+  gate4: "至少两折的种子平均相对两种对照均不下降；最差折下降 ≤ 1.0pp"
+  gate5: "任一类别 pooled 召回的种子均值相对两种对照下降不超过 1.0pp"
+  gate6: "至少两个采集组相对 R0 净改对（并报告收益集中程度）"
+
+tolerances:
+  p0_logit_atol: 0.0001
+  note: "既有 P0 logit atol=1e-4 不放宽"

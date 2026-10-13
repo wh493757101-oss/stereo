@@ -44,6 +44,7 @@ from core.polar_compute import (
 )
 from core.rectification import StereoRectifier
 from core.stereo_matching import (
+    UPSAMPLE_LEGACY_ZERO_LINEAR_V1,
     StereoMatcher,
     StereoMatcherConfig,
     build_horizontal_bands,
@@ -322,6 +323,10 @@ class DualStageInferenceEngine:
             texture_threshold=float(stereo_cfg.get("texture_threshold", 10.0)),
             lr_check_threshold_px=float(stereo_cfg.get("lr_check_threshold_px", 2.0)),
             min_valid_ratio=float(stereo_cfg.get("min_valid_ratio", 0.05)),
+            # explicit fix versions reach the matcher; configs without the
+            # key keep the bitwise legacy default
+            upsample_version=str(stereo_cfg.get(
+                "upsample_version", UPSAMPLE_LEGACY_ZERO_LINEAR_V1)),
         )
 
         rectify_enabled = bool(rectification_cfg.get("enabled", False))
@@ -446,6 +451,8 @@ class DualStageInferenceEngine:
                 config.stereo.get("lr_check_threshold_px", 2.0)
             ),
             min_valid_ratio=float(config.stereo.get("min_valid_ratio", 0.05)),
+            upsample_version=str(config.stereo.get(
+                "upsample_version", UPSAMPLE_LEGACY_ZERO_LINEAR_V1)),
         )
 
         rectifier = None

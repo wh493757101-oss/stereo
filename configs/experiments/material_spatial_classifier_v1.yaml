@@ -1,0 +1,141 @@
+{
+  "experiment": "material_spatial_classifier_v1",
+  "spatial_root": "analysis/runs/material_spatial_input_v1/review_closeout/20261013T031808Z_advance_922b3f/real_build",
+  "features": "analysis/runs/material_residual_scale_v1/20261011T074823Z_e36bf75e/cache_build/features/feature_cache.npz",
+  "feature_manifest": "analysis/runs/material_residual_scale_v1/20261011T074823Z_e36bf75e/cache_build/features/feature_manifest.json",
+  "p0_root": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit",
+  "folds": "analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/folds.json",
+  "anchors": [
+    {
+      "path": "analysis/runs/material_spatial_input_v1/review_closeout/20261013T031808Z_advance_922b3f/real_build/cache/binding.json",
+      "sha256": "aaa5ee1f4e8f41cdc905d51204e935be86f26a65a49c6af8d0f247b5cecab0f9"
+    },
+    {
+      "path": "analysis/runs/material_residual_scale_v1/20261011T074823Z_e36bf75e/cache_build/features/feature_cache.npz",
+      "sha256": "7e9c68ea8c9c57d2bd391a0465cbd8ead32450cfa7f8a731b7160e35615f7f15"
+    },
+    {
+      "path": "analysis/runs/material_residual_scale_v1/20261011T074823Z_e36bf75e/cache_build/features/feature_manifest.json",
+      "sha256": "4420585f9ecfff0a47cb06d38af76cbedd3750372ca523475879a476492d3ab0"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json",
+      "sha256": "0831dc29aca1e0e7244d36249a44b740a05f800238c3b2e54dc1a15e82bf8092"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/model_state.pt",
+      "sha256": "3b5d0b6868bf97ac23f4e7354adf4b5fb8e8c9e7b51eae515e4dfbfbaa886694"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/scaler.json",
+      "sha256": "701be249b3f1aabb5ae246c72ed843a94e8f3728b27e698393aa951aed438fdd"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/outer_eval_predictions.jsonl",
+      "sha256": "f0a6c789bff8a161ef60d9b56323fac120d5f80c5f08dcdd0bb0da3e6fd5cb26"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/model_state.pt",
+      "sha256": "f72a5f7d74053b62be15c91f35fd36b73c09d1975938a124adfafeaa204c9955"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/scaler.json",
+      "sha256": "fbf3597bf44e650103ee190d970dc08626eb7ad16db2eb028999cc27873e5930"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/outer_eval_predictions.jsonl",
+      "sha256": "61c30e270c245e11f7657cf9569825ab98c73138a379347b52e7bffe6afb8e9e"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/model_state.pt",
+      "sha256": "8abba262b21aaffe11ba9ce433748fb03387abdde23fa3e36222eeffbf6e8f2a"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/scaler.json",
+      "sha256": "7011781806be21812d128a9fc8d39a0dbcd0215df0b7dc699c1d58cce7b50999"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/outer_eval_predictions.jsonl",
+      "sha256": "11884c9e93c46d28efcc1c499afe51c499fb347ddce5fa6fa079ba8197e36505"
+    },
+    {
+      "path": "analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/folds.json",
+      "sha256": "d2965a5c03f993eba5846f33d57cfe30b6b671ca15f68c0c7e410dbe0faf4712"
+    },
+    {
+      "path": "analysis/runs/material_spatial_input_v1/review_closeout/20261013T031808Z_advance_922b3f/real_build/run_status.json",
+      "sha256": "c71b37c48e6111b7140c85cbf6b9468a77119426ee61086e1b441d453c71db21"
+    }
+  ],
+  "model": {
+    "channels": [
+      16,
+      32,
+      64
+    ],
+    "kernel": 3,
+    "stride": 2,
+    "padding": 1,
+    "conv_bias": false,
+    "group_norm_groups": 4,
+    "activation": "SiLU",
+    "pooling": "coverage_object_area_weighted",
+    "context_dim": 286,
+    "hidden": 64,
+    "classes": 4
+  },
+  "variants": [
+    "B_stats",
+    "B_L",
+    "B_R",
+    "B_Q"
+  ],
+  "seeds": [
+    2026,
+    2027,
+    2028
+  ],
+  "fold_ids": [
+    "fold0",
+    "fold1",
+    "fold2"
+  ],
+  "planned_fits": 36,
+  "training": {
+    "device": "cuda:0",
+    "precision": "float32",
+    "batch": 32,
+    "workers": 0,
+    "epochs": 60,
+    "patience": 10,
+    "optimizer": "AdamW",
+    "lr": 0.001,
+    "weight_decay": 0.001,
+    "augmentation": false,
+    "class_weighting": false,
+    "loss": "CE_available_rows_only",
+    "selection": [
+      "inner_val_macro_f1",
+      "inner_val_accuracy",
+      "earlier_epoch"
+    ]
+  },
+  "missing": {
+    "full_missing": "exact original P0 fallback; omitted from head loss",
+    "partial_missing": "zero-standardized block plus C flags"
+  },
+  "budgets": {
+    "total_minutes": 480,
+    "single_fit_minutes": 10,
+    "smoke_minutes": 10
+  },
+  "gates": {
+    "gate1": "Q-P0 >=1.0pp and Q-L >=0.5pp",
+    "gate2": "Q-R positive mean F1 and net corrections",
+    "gate3": ">=2 seeds net correct vs P0 and L",
+    "gate4": ">=2 folds nondeclining vs P0 and L; worst drop <=1pp",
+    "gate5": "every pooled class mean recall drop <=1pp vs P0 and L",
+    "gate6": ">=2 groups net correct vs P0"
+  },
+  "science": "Existing train+val exploratory development; shared S16 is polarization statistics, not pure gray; Q vs R is representation comparison; no detector/GUI/deployment changes."
+}

@@ -1,0 +1,19 @@
+{
+  "experiment": "yolo26_spatial_v1",
+  "source_config": "configs/experiments/material_spatial_classifier_v1.yaml",
+  "source_config_sha256": "8f77f35e9506db17aa694f2ce7bf80e8aa9729287c41c3eff19b55ce1b643851",
+  "official_base": "yolo26n-cls.pt",
+  "official_base_sha256": "0dd6f8dbc448870ac98a3cbb7156f923f7ce21fed3755d4019169ffffd279e81",
+  "class_names": ["metal_submarine", "plastic_submarine", "plastic_fish", "real_fish"],
+  "fold_ids": ["fold0", "fold1", "fold2"],
+  "seeds": [2026, 2027, 2028],
+  "variants": ["B_stats", "B_L", "B_R", "B_Q"],
+  "planned_gray_fits": 9,
+  "planned_spatial_fits": 36,
+  "gray_training": {"epochs": 30, "batch": 32, "lr": 0.001, "weight_decay": 0.01, "augmentation": false, "device": "cuda:0", "precision": "float32"},
+  "spatial_training": {"epochs": 60, "patience": 10, "batch": 32, "lr": 0.001, "weight_decay": 0.001, "augmentation": false, "device": "cuda:0", "precision": "float32"},
+  "model": {"gray_feature_dim": 1280, "context_dim": 1310, "spatial_dim": 64, "hidden": 64, "classes": 4},
+  "budgets": {"total_minutes": 480, "gray_fit_minutes": 20, "spatial_fit_minutes": 10},
+  "selection": ["inner_val_macro_f1", "inner_val_accuracy", "earlier_epoch"],
+  "science": "Existing train+val, capture-group isolated. Y0 is fold/seed-specific YOLO26. Shared S16 remains in every spatial arm. No MiT features or P0 predictions are used."
+}

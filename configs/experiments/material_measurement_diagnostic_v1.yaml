@@ -1,0 +1,143 @@
+# material_measurement_diagnostic_v1 — batch-1 measurement-chain and
+# architecture-limitation diagnostic (no training, no production changes).
+#
+# This config declares the frozen identities the diagnostic consumes and the
+# single-factor interventions it runs. The three anchors are verified by
+# FILE-BYTES SHA256 before anything else; every other expectation is read
+# FROM the verified anchors (never from current bytes re-hashed on the fly).
+experiment: material_measurement_diagnostic_v1
+purpose: >
+  Batch 1 diagnostics: (A) residual-capacity statistics from saved P0
+  logits, (B) analytic synthetic counterexamples for the production
+  disparity-upsample chain, (C) frozen real-image frame selection,
+  (D) single-factor real-image measurement recomputation (GT-conditional
+  and prediction-conditional), (E) real-fish missed-detection per-case
+  review. No training, no production behaviour change, no dataset or
+  label modification, no second-batch scale experiments.
+
+anchors:
+  frozen_runtime_config:
+    path: configs/experiments/material_residual_runtime_v1_complete.yaml
+    sha256: 2b63cf30f6b9d76cb0d8641d618e83c406cee8e07dc7e6d1faab71abce212f27
+  protocol:
+    path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+    sha256: 0831dc29aca1e0e7244d36249a44b740a05f800238c3b2e54dc1a15e82bf8092
+  artifact_manifest:
+    path: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/artifact_manifest.json
+    sha256: 1e01a8fdb0af8bb7e413f66eb3992bb40bc982ebeb4b8840156bb74bf0b6776b
+
+sources:
+  p0_oracles:
+    fold0: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold0_P0/outer_eval_predictions.jsonl
+    fold1: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold1_P0/outer_eval_predictions.jsonl
+    fold2: analysis/runs/material_existing_data_v1/manual_20261008_085510_822/fit/models/fold2_P0/outer_eval_predictions.jsonl
+  local_feature_manifest: analysis/runs/material_polar_residual_v1/polar_local_20261009T013057Z_ec28494d/cache_build/local_features/feature_manifest.json
+  runtime_evidence_dir: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/evaluate
+  runtime_frames: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/evaluate/frames_complete.jsonl
+  runtime_predictions: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/evaluate/predictions_complete.jsonl
+  runtime_layer_b_summary: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/evaluate/layer_b_summary.json
+  detection_dir: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/detection
+  atlas_dir: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/atlas_rebuild/atlas
+  atlas_manifest: analysis/runs/material_existing_data_v1/20260930T045500Z_c5d9e8/atlas_rebuild/atlas_manifest.json
+  split_csv: datasets/underwater_seg_binary_v2/split_assignment.csv
+  label_root: datasets/underwater_seg_v2/labels
+
+class_names: [metal_submarine, plastic_submarine, plastic_fish, real_fish]
+
+protocol_expectations:
+  val_frames: 180
+  dev_splits: [train, val]
+
+# Production parameters, pinned here and cross-checked field-by-field
+# against the verified frozen runtime config at source-verify time.
+stereo:
+  matcher: sgbm
+  mode: 3way
+  scale: 0.25
+  max_disp: 768
+  block_size: 7
+  uniqueness_ratio: 10
+  speckle_window: 100
+  speckle_range: 32
+  texture_threshold: 10.0
+  lr_check_threshold_px: 2.0
+  min_valid_ratio: 0.05
+  band_margin: 20
+  full_image_threshold: 0.9
+polarization:
+  gain: 1.0
+  epsilon: 1.0e-06
+  min_intensity_sum: 10.0
+crop_padding: 10
+calibration:
+  baseline: 0.09890970798524992
+  focal_length: 3643.5231322766995
+image_source:
+  already_rectified: true
+  note: >
+    the split CSV's left_path/right_path point into datasets/Rectified_v2,
+    the same already-rectified frames the frozen runtime Layer B consumed;
+    the diagnostic never re-rectifies (strictly avoiding double
+    rectification) and loads them through the shared to_gray_u8 boundary.
+  exposure_gain_gamma: NOT_AVAILABLE
+  sync_status: unknown
+
+selection:
+  max_frames_cap: 64
+  required_rules:
+    - val_real_fish_gt
+    - no_target_dev
+    - normal_control_panels
+    - missing_polar_per_class
+    - pipeline_m_below_1_frames
+    - group_coverage_first_frame
+  fill_rule: cycle groups in sorted order, take each group's next
+    unselected frame in sorted frame_id order, until max_frames
+  note: >
+    class and error information is used for this RETROSPECTIVE diagnostic
+    selection only; never for online routing, model selection or training.
+
+interventions:
+  upsample_control:
+    method: valid_weighted
+    w_min: 0.5
+    note: >
+      diagnostic control only — weighted mean of valid low-resolution
+      disparities, measured where the accumulated valid weight reaches
+      w_min. NOT a default fix; does not repair valid-valid depth
+      discontinuities.
+  right_shifts_px: [[1, 0], [-1, 0], [0, 1], [0, -1]]
+  shift_fill: zero (never wrap); pixels whose right-image sample lands on
+    a filled edge are marked unmeasurable
+  shift_meaning: >
+    +-1px is a SENSITIVITY intervention only; no real registration error
+    has been measured, and none is claimed.
+synthetic:
+  seed: 2026
+
+budget:
+  whole_run_minutes: 30
+  policy: one shared wall budget over admission, selection, all compute,
+    summaries and protection; on exhaustion the run stops at the next safe
+    boundary, keeps finished evidence and reports PARTIAL with a nonzero
+    exit; the budget is never reset per stage.
+
+output:
+  evidence_root: analysis/runs/material_residual_runtime_v1/measurement_diagnostic_v1
+  require_gitignored: true
+  final_leaf_must_not_exist: true
+
+review:
+  human_reviewed_default: false
+  visual_review_source: claude_visual_review
+  record_based_source: record_based
+  atlas_panel_prefixes:
+    missed_gt: unmatched_gt
+    control: control
+
+provenance_disclosure: >
+  The historical val/test reuse limits independence: this batch produces no
+  blind-test or independent-generalization claim, converts no correctable
+  count into realized gain, and calls no control arm more accurate on real
+  images (real images have no disparity ground truth here). Old test-split
+  data is not consumed.

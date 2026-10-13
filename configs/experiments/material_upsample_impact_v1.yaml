@@ -1,0 +1,91 @@
+# material_upsample_impact_v1 — the switchable disparity-upsample fix and
+# its classification-impact verification (batch 2).
+#
+# Two arms, one matcher implementation, two explicit upsample versions:
+#   legacy_zero_linear_v1              — the original production path
+#                                        (bitwise unchanged, still the
+#                                        default everywhere);
+#   valid_weighted_legacy_support_v1   — the only approved fix (support is
+#                                        unchanged at nearest-valid
+#                                        positions; kept positions carry
+#                                        the valid-weight-normalized
+#                                        disparity).
+# No training, no re-selection, no working-point change. configs/default.yaml
+# and all earlier experiment configs keep their original bytes; this file is
+# the ONLY configuration that selects the fix version.
+experiment: material_upsample_impact_v1
+
+anchors:
+  runtime_config:
+    path: configs/experiments/material_residual_runtime_v1_complete.yaml
+    sha256: 2b63cf30f6b9d76cb0d8641d618e83c406cee8e07dc7e6d1faab71abce212f27
+  protocol:
+    path: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/protocol/protocol.json
+    sha256: 0831dc29aca1e0e7244d36249a44b740a05f800238c3b2e54dc1a15e82bf8092
+  artifact_manifest:
+    path: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/artifact_manifest.json
+    sha256: 1e01a8fdb0af8bb7e413f66eb3992bb40bc982ebeb4b8840156bb74bf0b6776b
+  batch1_source_manifest:
+    path: analysis/runs/material_residual_runtime_v1/measurement_diagnostic_v1/20261010T145012Z_71caa5a0/source_manifest.json
+    sha256: cf0c1775dda6d25ee1b24bb0ffcb733bc9103f963c63b41c7b37964c00d1605b
+    bytes: 161458
+
+sources:
+  runtime_frames: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/evaluate/frames_complete.jsonl
+  runtime_predictions: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/evaluate/predictions_complete.jsonl
+  runtime_layer_b_summary: analysis/runs/material_residual_runtime_v1/residrt_c_20261009T125242Z_6c0ed9/evaluate/layer_b_summary.json
+  detection_dir: analysis/runs/material_existing_data_v1/20260930T021500Z_a3f7c1/detection
+  split_csv: datasets/underwater_seg_binary_v2/split_assignment.csv
+
+arms:
+  legacy:
+    upsample_version: legacy_zero_linear_v1
+  fix:
+    upsample_version: valid_weighted_legacy_support_v1
+
+candidates:
+  expected_ids:
+  - R0
+  - conditional_RC_s2026
+  - conditional_RC_s2027
+  - conditional_RC_s2028
+  - conditional_RCS_s2026
+  - conditional_RCS_s2027
+  - conditional_RCS_s2028
+  - linear_local_RC_s2026
+  - linear_local_RCS_s2026
+
+support_expectations:
+  frames: 180
+  gt_instances: 368
+  predictions: 380
+  matches: 346
+  missed_gt: 22
+  unmatched_predictions: 34
+
+tolerances:
+  # the frozen runtime tolerance, never widened
+  logit_atol: 0.0001
+
+reference_formal_v2:
+  # the retained batch-2 formal run is this repair's regression reference;
+  # identities below were taken by the Codex read-only retention review
+  predictions_arms: analysis/runs/material_upsample_impact_v1/20261011T093000Z_d65f704e/formal_v2/predictions_arms.jsonl
+  predictions_arms_sha256: 491c885cf3f6c58acff1a72b3a964edf792c0f1276361758186c28cf65eb15e2
+  metrics_summary: analysis/runs/material_upsample_impact_v1/20261011T093000Z_d65f704e/formal_v2/metrics_summary.json
+  metrics_summary_sha256: 442c601ccf3652955788a82fa7a3fa808a9ef39cce8fc6786f9fb8b7752049b3
+  note: >
+    retention checks only - these identities prove the retained evidence is
+    untouched; they are NOT the old run's protection manifest and the new
+    run builds its own first-read registry.
+
+provenance_disclosure: >
+  Detection support comes from the SAVED D0 predictions (the historical
+  operating point); Model A never runs (recording probe, zero calls
+  required). The matching is the frozen one from the runtime evidence —
+  both arms share it. The old test split is not consumed and no blind-test
+  or independent-generalization claim is made. Only 4 val capture groups
+  exist; no confidence interval is computed in this batch. Real images
+  have no disparity ground truth: every arm difference is a path
+  difference, never an accuracy or ranging-precision claim. A flat or
+  worse classification outcome is a valid, fully reportable result.
